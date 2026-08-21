@@ -1,0 +1,18 @@
+# Render blueprint — deploys PriceTruth as a persistent Node web service.
+# In Render: New + → Blueprint → connect the PriceTruth repo → Apply.
+# The app auto-seeds its demo data on boot, so no database provisioning is needed.
+services:
+  - type: web
+    name: pricetruth
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Render's routing requires binding all interfaces; the app defaults to
+      # loopback-only for local safety, so we open it up explicitly here.
+      - key: HOST
+        value: 0.0.0.0
+      # PORT is injected by Render automatically; the server reads process.env.PORT.

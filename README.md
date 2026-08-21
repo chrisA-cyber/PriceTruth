@@ -39,6 +39,27 @@ Other commands:
 | `npm run seed` | Re-seed demo data + mint a demo B2B API key |
 | `npm run keygen -- "Acme" pro` | Mint a B2B API key (printed once, stored hashed) |
 
+## Deploying a demo
+
+PriceTruth is a **persistent Node server** (it serves the web app *and* a live API, and
+writes to SQLite at runtime). It needs a host that runs a long-lived Node process — not a
+static/serverless host like Netlify or GitHub Pages, where the `/api/*` routes have nowhere
+to run. It auto-seeds its demo data on boot, so no database needs to be provisioned.
+
+**Render (recommended, free tier).** A blueprint ships in [`render.yaml`](render.yaml):
+
+1. In Render: **New + → Blueprint**, connect this repo, **Apply**.
+2. That's it — the blueprint sets `HOST=0.0.0.0`, pins Node 24, and health-checks `/api/health`.
+
+**Railway / Fly.io / any PaaS.** Set one env var, `HOST=0.0.0.0` (the platform supplies
+`PORT`), and start with `npm start` (see [`Procfile`](Procfile)). No build step, no deps.
+
+> The free tier's disk is ephemeral and idle instances sleep — fine for a demo, since the
+> app reseeds the demo catalog and 90-day history on every cold start. Alerts or tracked
+> points added at runtime reset on redeploy. For anything persistent, attach a disk (Render)
+> or point `PRICETRUTH_DB` at durable storage, and put TLS in front (the app speaks plain
+> HTTP and expects the platform to terminate TLS).
+
 ## What's in the box
 
 - **True-price engine** (`src/engine/`) — per-vertical fee models for hotels, flights,
