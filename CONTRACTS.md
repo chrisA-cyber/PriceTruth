@@ -5,7 +5,7 @@ built and tested; build against these contracts, do not change them.
 
 ## Stack rules
 
-- **Zero runtime dependencies.** Node >= 24, CommonJS, built-in `node:sqlite`.
+- **Zero runtime dependencies.** Node >= 24, ES modules (`"type": "module"`), built-in `node:sqlite`.
 - All money is **integer USD cents** end to end. Format only at the display edge.
 - Server: `npm start` → http://localhost:4780 (env `PORT` overrides). Auto-seeds demo data on first boot.
 - Tests: `npm test` (node:test, files in `test/`). Seed: `npm run seed`. Keys: `npm run keygen -- "label" starter|pro`.

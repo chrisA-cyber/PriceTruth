@@ -1,11 +1,9 @@
-'use strict';
-
 // Minimal, dependency-free ZIP archive writer — enough to package the browser
 // extension for download. Uses node:zlib for DEFLATE and hand-rolls the ZIP
 // container (local headers + central directory + EOCD). Keeps the project's
 // zero-runtime-dependency rule intact.
 
-const zlib = require('node:zlib');
+import zlib from 'node:zlib';
 
 // Fixed DOS timestamp so identical inputs produce byte-identical archives
 // (makes the per-origin cache stable). 2026-08-21 12:00:00.
@@ -97,4 +95,4 @@ function zip(entries) {
   return Buffer.concat([localBuf, centralBuf, eocd]);
 }
 
-module.exports = { zip, crc32 };
+export { zip, crc32 };

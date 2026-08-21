@@ -1,14 +1,12 @@
-'use strict';
-
 // Tests for the hand-rolled ZIP writer (src/extzip.js) and the
 // /download/extension.zip route that serves a per-origin extension bundle.
 
-const { describe, it, before, after } = require('node:test');
-const assert = require('node:assert/strict');
-const zlib = require('node:zlib');
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import zlib from 'node:zlib';
 
-const { zip, crc32 } = require('../src/extzip');
-const { createApp } = require('../src/server');
+import { zip, crc32 } from '../src/extzip.js';
+import { createApp } from '../src/server.js';
 
 // --- Minimal ZIP reader (local headers only) so tests can verify the bytes we
 // emit round-trip back to the exact input, without shelling out to unzip. ---

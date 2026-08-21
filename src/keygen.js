@@ -1,10 +1,8 @@
-'use strict';
-
 // CLI: mint a B2B API key. Usage:
 //   npm run keygen -- "Acme Travel" starter|pro
 // The raw key is printed once; only its SHA-256 hash is stored.
 
-const { open } = require('./db');
+import { open } from './db.js';
 
 const TIERS = ['starter', 'pro'];
 

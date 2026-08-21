@@ -1,26 +1,26 @@
-'use strict';
+import http from 'node:http';
+import path from 'node:path';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
-const http = require('node:http');
-const path = require('node:path');
-const fs = require('node:fs');
-const crypto = require('node:crypto');
+import { open } from './db.js';
+import { seed } from './seed.js';
+import { analyze, VERTICALS } from './engine/analyze.js';
+import { dealQuality } from './engine/score.js';
+import { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml } from './security.js';
+import { zip } from './extzip.js';
 
-const { open } = require('./db');
-const { seed } = require('./seed');
-const { analyze, VERTICALS } = require('./engine/analyze');
-const { dealQuality } = require('./engine/score');
-const { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml } = require('./security');
-const { zip } = require('./extzip');
+import PKG from '../package.json' with { type: 'json' };
+import HOTEL from './data/fees/hotel.json' with { type: 'json' };
+import FLIGHT from './data/fees/flight.json' with { type: 'json' };
+import TICKET from './data/fees/ticket.json' with { type: 'json' };
+import SUBSCRIPTION from './data/fees/subscription.json' with { type: 'json' };
+import partnersData from './data/partners.json' with { type: 'json' };
 
-const PKG = require('../package.json');
-const EXTENSION_DIR = path.join(__dirname, '..', 'extension');
-const HOTEL = require('./data/fees/hotel.json');
-const FLIGHT = require('./data/fees/flight.json');
-const TICKET = require('./data/fees/ticket.json');
-const SUBSCRIPTION = require('./data/fees/subscription.json');
-const PARTNERS = require('./data/partners.json').partners;
-
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PARTNERS = partnersData.partners;
+const EXTENSION_DIR = path.join(import.meta.dirname, '..', 'extension');
+const PUBLIC_DIR = path.join(import.meta.dirname, '..', 'public');
 const PORT = Number(process.env.PORT) || 4780;
 
 const MIME = {
@@ -441,7 +441,7 @@ function createApp({ dbPath } = {}) {
   return { server, db };
 }
 
-if (require.main === module) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { server, db } = createApp();
   // Bind loopback locally so a dev box is never exposed to the LAN. On a hosted
   // platform (Render/Railway/Fly/Heroku set their own PORT, and Render sets
@@ -469,4 +469,4 @@ if (require.main === module) {
   process.on('SIGTERM', shutdown);
 }
 
-module.exports = { createApp };
+export { createApp };

@@ -1,13 +1,8 @@
-'use strict';
-
-const path = require('node:path');
-const { assertCents, pctOf, sum } = require('./money');
-
-const DATA_DIR = path.join(__dirname, '..', 'data', 'fees');
-const HOTEL = require(path.join(DATA_DIR, 'hotel.json'));
-const FLIGHT = require(path.join(DATA_DIR, 'flight.json'));
-const TICKET = require(path.join(DATA_DIR, 'ticket.json'));
-const SUBSCRIPTION = require(path.join(DATA_DIR, 'subscription.json'));
+import { assertCents, pctOf, sum } from './money.js';
+import HOTEL from '../data/fees/hotel.json' with { type: 'json' };
+import FLIGHT from '../data/fees/flight.json' with { type: 'json' };
+import TICKET from '../data/fees/ticket.json' with { type: 'json' };
+import SUBSCRIPTION from '../data/fees/subscription.json' with { type: 'json' };
 
 const VERTICALS = ['hotel', 'flight', 'ticket', 'subscription', 'retail'];
 
@@ -345,4 +340,4 @@ function analyze(request) {
   }
 }
 
-module.exports = { analyze, VERTICALS };
+export { analyze, VERTICALS };

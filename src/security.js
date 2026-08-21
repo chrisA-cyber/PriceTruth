@@ -1,5 +1,3 @@
-'use strict';
-
 // Security middleware for the zero-dependency HTTP server: strict headers,
 // per-client token-bucket rate limiting, safe JSON body parsing, validators.
 
@@ -144,4 +142,4 @@ function escapeHtml(s) {
     .replaceAll("'", '&#39;');
 }
 
-module.exports = { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml, CSP };
+export { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml, CSP };

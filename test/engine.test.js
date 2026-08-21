@@ -1,15 +1,13 @@
-'use strict';
-
 // Engine unit tests: the four pitch scenarios (exact demo-product contexts),
 // default estimation paths with honest certainty tags, quantity math,
 // integer-cents money helpers, and the deal-quality scorer.
 
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 
-const { analyze, VERTICALS } = require('../src/engine/analyze');
-const { isCents, assertCents, pctOf, sum, fmtUSD } = require('../src/engine/money');
-const { dealQuality } = require('../src/engine/score');
+import { analyze, VERTICALS } from '../src/engine/analyze.js';
+import { isCents, assertCents, pctOf, sum, fmtUSD } from '../src/engine/money.js';
+import { dealQuality } from '../src/engine/score.js';
 
 const byCode = (report, code) => report.lineItems.find((i) => i.code === code);
 const itemsTotal = (report) => report.lineItems.reduce((acc, i) => acc + i.amount_cents, 0);

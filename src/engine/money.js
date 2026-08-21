@@ -1,5 +1,3 @@
-'use strict';
-
 // All monetary amounts in PriceTruth are integer USD cents. Floating point
 // never touches stored or summed money; percentages round half-up once.
 
@@ -38,4 +36,4 @@ function fmtUSD(cents, { compact = false } = {}) {
   return `$${d}.${String(rem).padStart(2, '0')}`;
 }
 
-module.exports = { isCents, assertCents, pctOf, sum, fmtUSD };
+export { isCents, assertCents, pctOf, sum, fmtUSD };

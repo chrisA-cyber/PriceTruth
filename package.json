@@ -4,7 +4,7 @@
   "description": "PriceTruth — the actual price of anything online. True-cost breakdowns, price history, and deal quality scores.",
   "license": "UNLICENSED",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=24"
   },
@@ -12,7 +12,7 @@
     "start": "node src/server.js",
     "seed": "node src/seed.js",
     "keygen": "node src/keygen.js",
-    "test": "node --test test/"
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {}
 }

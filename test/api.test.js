@@ -1,22 +1,20 @@
-'use strict';
-
 // End-to-end HTTP tests against the real server: in-memory SQLite, ephemeral
 // ports, global fetch. Each describe block builds its own app instance so the
 // per-IP rate-limit budgets (GET ~120 burst, POST ~20 burst) never bleed
 // between suites — the final suite deliberately exhausts one.
 
-const { describe, it, before, after } = require('node:test');
-const assert = require('node:assert/strict');
-const http = require('node:http');
-const path = require('node:path');
-const fs = require('node:fs');
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import path from 'node:path';
+import fs from 'node:fs';
 
-const { createApp } = require('../src/server');
+import { createApp } from '../src/server.js';
 
 // The 403 test requires admin minting to be disabled regardless of shell env.
 delete process.env.ADMIN_TOKEN;
 
-const INDEX_HTML = path.join(__dirname, '..', 'public', 'index.html');
+const INDEX_HTML = path.join(import.meta.dirname, '..', 'public', 'index.html');
 
 const VEGAS_CONTEXT = { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500 };
 

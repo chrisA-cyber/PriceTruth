@@ -1,11 +1,10 @@
-'use strict';
-
 // Seeds the demo catalog and 90 days of deterministic synthetic price history.
 // Synthetic data is clearly labeled as demo data in the UI; a production
 // deployment replaces this with real tracked prices.
 
-const { open } = require('./db');
-const { analyze } = require('./engine/analyze');
+import { pathToFileURL } from 'node:url';
+import { open } from './db.js';
+import { analyze } from './engine/analyze.js';
 
 // Small deterministic PRNG so every seed run produces identical history.
 function lcg(seed) {
@@ -104,7 +103,7 @@ function seed(db) {
   }
 }
 
-if (require.main === module) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = open();
   seed(db);
   const demoKey = db.createApiKey('local demo key', 'starter');
@@ -114,4 +113,4 @@ if (require.main === module) {
   db.close();
 }
 
-module.exports = { seed, DEMO_PRODUCTS };
+export { seed, DEMO_PRODUCTS };

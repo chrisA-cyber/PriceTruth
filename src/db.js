@@ -1,11 +1,9 @@
-'use strict';
+import path from 'node:path';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 
-const path = require('node:path');
-const fs = require('node:fs');
-const crypto = require('node:crypto');
-const { DatabaseSync } = require('node:sqlite');
-
-const DEFAULT_PATH = path.join(__dirname, '..', 'data', 'pricetruth.db');
+const DEFAULT_PATH = path.join(import.meta.dirname, '..', 'data', 'pricetruth.db');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS products (
@@ -150,4 +148,4 @@ function wrap(db) {
   };
 }
 
-module.exports = { open, DEFAULT_PATH };
+export { open, DEFAULT_PATH };

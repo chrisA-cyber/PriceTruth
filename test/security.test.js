@@ -1,12 +1,10 @@
-'use strict';
-
 // Unit tests for the security module: validators (HttpError 400 semantics),
 // HTML escaping, and the token-bucket rate limiter incl. bucket pruning.
 
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 
-const { RateLimiter, HttpError, validate, escapeHtml } = require('../src/security');
+import { RateLimiter, HttpError, validate, escapeHtml } from '../src/security.js';
 
 // Every validator failure must be an HttpError with status 400 so the server
 // maps it straight to a client error.

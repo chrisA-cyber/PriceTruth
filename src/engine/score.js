@@ -1,6 +1,4 @@
-'use strict';
-
-const { fmtUSD } = require('./money');
+import { fmtUSD } from './money.js';
 
 // Deal quality 0–100 from price history plus fee load.
 //  - up to 60 pts: where today's true price sits in the window's low..high range
@@ -36,4 +34,4 @@ function dealQuality({ current_cents, low_cents, high_cents, avg_cents, feeLoadP
   return { score, label, reasons };
 }
 
-module.exports = { dealQuality };
+export { dealQuality };
