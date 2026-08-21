@@ -163,7 +163,7 @@
     <li>No cookies of any kind — the server never sets one.</li>
     <li>No analytics, pixels, fingerprinting, or session recording.</li>
     <li>No third-party requests: everything is served from our own origin and our Content-Security-Policy blocks the rest. Our server makes no outbound network calls.</li>
-    <li>No IP logging. IPs are used transiently, in memory only, for rate limiting, and are discarded within minutes — never written to disk.</li>
+    <li>No IP logging. IPs are used only in memory for rate limiting, held in short-lived buckets that a background sweep removes within about 10–15 minutes of your last request (sooner under load), and never written to disk.</li>
     <li>No query strings or search terms in logs — only the HTTP method, path, status code, and response time.</li>
     <li>A <code>no-referrer</code> policy, so outbound clicks do not tell the destination site what you were looking at here.</li>
   </ul>

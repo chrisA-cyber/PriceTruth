@@ -277,6 +277,15 @@ describe('B2B API keys, metering, and quota', () => {
     assert.equal(usage.tier, 'starter');
   });
 
+  it('GET /api/v1/products/:id is flagged as demo data', async () => {
+    const res = await fetch(`${app.base}/api/v1/products/vegas-hotel`, { headers: { 'X-API-Key': rawKey } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.demoData, true);
+    assert.ok(body.history.length > 0);
+    assert.ok(body.usage);
+  });
+
   it('429 once the daily quota is exceeded', async () => {
     const keyRow = app.db.findApiKey(rawKey);
     app.db.raw.prepare('UPDATE api_usage SET count = 200 WHERE key_id = ?').run(keyRow.id);
@@ -330,6 +339,22 @@ describe('affiliate interstitial and static serving', () => {
     const res = await go('not-a-partner', 'https://booking.com/hotel');
     assert.equal(res.status, 404);
     await res.arrayBuffer();
+  });
+
+  it('prototype-key partner is 404, not a 500', async () => {
+    for (const k of ['__proto__', 'constructor', 'hasOwnProperty', 'valueOf']) {
+      const res = await go(k, 'https://booking.com/hotel');
+      assert.equal(res.status, 404, `/go/${k} should 404`);
+      await res.arrayBuffer();
+    }
+  });
+
+  it('prototype-key context on /api/analyze falls back cleanly (no 500/leak)', async () => {
+    const res = await postJson(app.base, '/api/analyze',
+      { vertical: 'hotel', advertised_cents: 21900, context: { market: '__proto__' } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.truePrice.unit, 'per_night');
   });
 
   // Frontend may not be built yet; check fs.existsSync and skip gracefully.

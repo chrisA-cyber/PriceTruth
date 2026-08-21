@@ -168,6 +168,23 @@ describe('analyze: subscription intro-month edges', () => {
     assert.equal(r.truePrice.amount_cents, 1999 * 12);
     assert.ok(r.disclosures.some((d) => d.includes('after signup')));
   });
+
+  it('out-of-range introMonths is treated as estimated, not listed', () => {
+    // Honesty guard: an integer outside [0,12] is discarded for the pattern
+    // typical, so the intro line must NOT be tagged as caller-listed.
+    for (const bad of [20, -1, 999]) {
+      const r = analyze({ vertical: 'subscription', advertised_cents: 999, context: { introMonths: bad, renewal_cents: 1999 } });
+      const intro = byCode(r, 'intro');
+      assert.ok(intro, `intro line present for introMonths=${bad}`);
+      assert.equal(intro.certainty, 'typical', `introMonths=${bad} must be typical, not listed`);
+      assert.ok(r.confidence < 1, `introMonths=${bad} must lower confidence`);
+    }
+  });
+
+  it('a valid listed introMonths keeps the intro line listed', () => {
+    const r = analyze({ vertical: 'subscription', advertised_cents: 999, context: { introMonths: 3, renewal_cents: 1999 } });
+    assert.equal(byCode(r, 'intro').certainty, 'listed');
+  });
 });
 
 describe('analyze: retail', () => {
@@ -214,6 +231,27 @@ describe('analyze: invalid inputs throw', () => {
   });
 });
 
+describe('analyze: prototype-key context is safe', () => {
+  // A user-supplied profile key like __proto__ must fall back to the default
+  // profile and compute cleanly, never resolve to Object.prototype and throw.
+  const keys = ['__proto__', 'constructor', 'hasOwnProperty', 'toString', 'valueOf'];
+  it('hotel market falls back for prototype keys', () => {
+    for (const k of keys) {
+      const r = analyze({ vertical: 'hotel', advertised_cents: 21900, context: { market: k } });
+      assert.equal(r.truePrice.unit, 'per_night');
+      assert.ok(r.truePrice.amount_cents >= 21900);
+    }
+  });
+  it('ticket platform and subscription pattern fall back for prototype keys', () => {
+    for (const k of keys) {
+      const t = analyze({ vertical: 'ticket', advertised_cents: 8600, context: { platform: k } });
+      assert.ok(t.truePrice.amount_cents >= 8600);
+      const s = analyze({ vertical: 'subscription', advertised_cents: 999, context: { pattern: k } });
+      assert.ok(s.truePrice.amount_cents >= 999);
+    }
+  });
+});
+
 describe('money helpers', () => {
   it('pctOf rounds half-up on integer cents', () => {
     assert.equal(pctOf(105, 10), 11); // 10.5 -> 11
@@ -221,6 +259,10 @@ describe('money helpers', () => {
     assert.equal(pctOf(50, 1), 1);    // 0.5 -> 1
     assert.equal(pctOf(10000, 8.25), 825);
     assert.equal(pctOf(0, 99), 0);
+    // Exact half-cent products must round up despite float representation:
+    // 5.1% of 1500 = 76.5 -> 77 (float multiply lands 7649.999… without BigInt).
+    assert.equal(pctOf(1500, 5.1), 77);
+    assert.equal(pctOf(2500, 8.7), 218); // 217.5 -> 218
   });
   it('pctOf validates its inputs', () => {
     assert.throws(() => pctOf(100, -0.1), RangeError);

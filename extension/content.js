@@ -61,6 +61,18 @@
     return FM.isCents(value) && value >= 100 ? value : null;
   }
 
+  // Walk a few ancestors: line-through is often on a wrapper, not the text's
+  // own element, and text-decoration-line is not an inherited property.
+  function isStruckThrough(el) {
+    var node = el;
+    for (var depth = 0; node && depth < 4; depth++) {
+      var dec = window.getComputedStyle(node).textDecorationLine;
+      if (dec && dec.indexOf('line-through') !== -1) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   function hasPriceHint(el) {
     var node = el;
     for (var depth = 0; node && depth < 4; depth++) {
@@ -98,7 +110,10 @@
       if (rect.width <= 0 || rect.height <= 0) continue; // not rendered
       var style = window.getComputedStyle(el);
       if (style.visibility === 'hidden' || style.display === 'none') continue;
-      if (style.textDecorationLine && style.textDecorationLine.indexOf('line-through') !== -1) continue; // struck-out "was" price
+      // Struck-out "was" price. text-decoration-line does not inherit in the
+      // cascade, so a line-through set on an ancestor won't show on el's own
+      // computed style — walk up a few levels to catch that common markup.
+      if (isStruckThrough(el)) continue;
 
       var cents = extractCents(text);
       if (cents === null) continue;

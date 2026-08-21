@@ -2,9 +2,16 @@
 
 **The truth layer at the moment you're looking at a price.** Coupon extensions
 ask "can I get you a coupon?" — this overlay answers **"what will this actually
-cost you?"** When you're staring at a $219/night hotel room, PriceTruth shows
-the ~$317/night reality: resort fee, occupancy taxes, parking — before checkout
-does.
+cost you?"** When you're staring at a $219/night hotel room, the on-page overlay
+adds the fees a typical US hotel tacks on — occupancy taxes and parking — to show
+a truer nightly cost (about $265 with the US-average profile the overlay uses on a
+generic hotel site).
+
+The bigger gaps show up where the fee profile is richer: the popup calculator
+defaults to a Las Vegas hotel, where a ~$45 resort fee is near-universal, and
+turns that same $219 into **$317.32/night**. The overlay uses a conservative
+US-average profile (resort fees appear only in markets where they're prevalent),
+so pick the market in the popup to see market-specific fees.
 
 Chrome Manifest V3, loadable unpacked. No build step, no dependencies, no icons.
 
@@ -26,6 +33,14 @@ This is the product's differentiator, so it is worth stating bluntly:
 Compare that with coupon/shopping extensions, whose business model requires
 telling a server what you're shopping for.
 
+**About permissions.** The manifest requests no API `permissions` (no storage,
+tabs, scripting, or webRequest). It does declare `content_scripts.matches` for
+the eight supported sites, and Chrome counts those as *host permissions* — at
+install you'll see "Read and change your data on booking.com and 7 other sites."
+That access is what lets the content script read the price on the page and draw
+the overlay; the privacy guarantee above still holds, because nothing it reads is
+ever sent anywhere.
+
 ## What it does
 
 **On supported sites** (booking.com, hotels.com, expedia.com, ticketmaster.com,
@@ -34,8 +49,9 @@ stubhub.com, spirit.com — plus example.com as a demo), a content script:
 1. Scans visible text for a price (`$219`, `$1,299.00`, …) and takes the most
    prominent one — largest type, price-ish markup.
 2. Classifies the vertical from the hostname (hotel / ticket / flight).
-3. Computes a true-cost estimate from the bundled typical-fee profiles and
-   shows a small bottom-right badge: **"PriceTruth: ~$317.32/night real"**.
+3. Computes a true-cost estimate from the bundled typical-fee profiles (the
+   conservative US-average profile for hotels) and shows a small bottom-right
+   badge, e.g. **"PriceTruth: ~$265/night real"** for a $219 room.
 4. Click the badge for the line-item breakdown — every non-listed line is
    tagged `typical` or `estimated`, with the note *"Estimated from typical fees
    for this site's category — actual checkout may differ."*
@@ -95,7 +111,7 @@ verdict and breakdown — all computed locally.
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3 manifest — content scripts + popup, no permissions requested |
+| `manifest.json` | MV3 manifest — content scripts + popup; declares no API `permissions`, but its `content_scripts.matches` are host permissions (see below) |
 | `feemodel.js` | Bundled fee-model snapshot + integer-cents math (shared by content script and popup) |
 | `content.js` | Price detection + overlay badge on supported sites |
 | `overlay.css` | Badge/card styles (`pt-ext-` prefixed, high z-index) |

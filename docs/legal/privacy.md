@@ -44,9 +44,10 @@ recover it, and it never appears in logs.
 - No third-party requests: every script, style, and image is served from our own
   origin, and our Content-Security-Policy blocks everything else. Our server
   makes no outbound network calls.
-- No IP address logging. IP addresses are used transiently, in memory only, for
-  rate limiting (abuse prevention), and are discarded within minutes. They are
-  never written to disk.
+- No IP address logging. IP addresses are used only in memory, for rate limiting
+  (abuse prevention). Each address is held in a short-lived bucket that a
+  background sweep removes within about 10–15 minutes of your last request, and
+  sooner under load. IP addresses are never written to disk.
 - No query strings or search terms in logs. Our access log records only the
   HTTP method, path, status code, and response time.
 - Our pages send a `Referrer-Policy: no-referrer` header, so outbound clicks do

@@ -94,7 +94,7 @@ Compute a true-cost report for one offer.
 |---|---|---|---|
 | `vertical` | string | yes | One of `hotel`, `flight`, `ticket`, `subscription`, `retail`. |
 | `advertised_cents` | integer | yes | The advertised price in cents, `0..1e9`. |
-| `context` | object | no | Vertical-specific detail (below). Max 4,096 bytes as JSON. Anything you supply becomes a `listed` line; anything you omit is filled from typicals/estimates and labeled accordingly. |
+| `context` | object | no | Vertical-specific detail (below). Its JSON serialization must be at most 4,096 characters. Anything you supply becomes a `listed` line; anything you omit is filled from typicals/estimates and labeled accordingly. |
 
 Request bodies over 32 KB are rejected with 413. `context` keys per vertical (all optional;
 all `*_cents` fields are integer cents):

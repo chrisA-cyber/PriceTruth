@@ -127,6 +127,18 @@ function createApp({ dbPath } = {}) {
   const writeLimiter = new RateLimiter({ capacity: 20, refillPerSec: 0.2 });
   const b2bLimiter = new RateLimiter({ capacity: 30, refillPerSec: 0.5 });
 
+  // Sweep idle rate-limit buckets every 5 min so an idle IP is dropped from
+  // memory within ~15 min of its last request (prune evicts buckets idle >10
+  // min) — this is what makes the privacy policy's "held only transiently" true
+  // even at low traffic, not just under saturation. unref() so it never keeps
+  // the process alive.
+  const sweep = setInterval(() => {
+    readLimiter.prune();
+    writeLimiter.prune();
+    b2bLimiter.prune();
+  }, 5 * 60 * 1000);
+  if (typeof sweep.unref === 'function') sweep.unref();
+
   async function handle(req, res) {
     const started = Date.now();
     const ip = req.socket.remoteAddress || 'unknown';
@@ -261,6 +273,7 @@ function createApp({ dbPath } = {}) {
 
     if (req.method === 'POST' && pathname === '/api/v1/analyze') {
       const body = await readJsonBody(req);
+      // analyze on caller-supplied inputs isn't demo data; product-backed reads are.
       return sendJson(res, 200, { ...runAnalyze(body), usage });
     }
     if (req.method === 'POST' && pathname === '/api/v1/track') {
@@ -276,13 +289,13 @@ function createApp({ dbPath } = {}) {
       }
       const report = analyze({ vertical: product.vertical, advertised_cents: advertised, context: product.context });
       db.addPricePoint(id, { advertised_cents: advertised, true_cents: report.truePrice.amount_cents });
-      return sendJson(res, 201, { tracked: true, true_cents: report.truePrice.amount_cents, usage });
+      return sendJson(res, 201, { tracked: true, true_cents: report.truePrice.amount_cents, demoData: true, usage });
     }
     const productMatch = pathname.match(/^\/api\/v1\/products\/([a-z0-9-]{1,64})$/);
     if (req.method === 'GET' && productMatch) {
       const product = db.getProduct(productMatch[1]);
       if (!product) throw new HttpError(404, 'unknown product');
-      return sendJson(res, 200, { ...productPayload(db, product, { includeHistory: true }), usage });
+      return sendJson(res, 200, { ...productPayload(db, product, { includeHistory: true }), demoData: true, usage });
     }
     if (req.method === 'GET' && pathname === '/api/v1/usage') {
       return sendJson(res, 200, { usage });
@@ -311,7 +324,8 @@ function createApp({ dbPath } = {}) {
 
   function handleAffiliate(res, url, pathname) {
     const partnerId = pathname.slice('/go/'.length);
-    const partner = PARTNERS[partnerId];
+    // Object.hasOwn guard: prototype keys like __proto__ must 404, not resolve.
+    const partner = Object.hasOwn(PARTNERS, partnerId) ? PARTNERS[partnerId] : null;
     if (!partner) throw new HttpError(404, 'unknown partner');
     const target = url.searchParams.get('target');
     if (!target) throw new HttpError(400, 'missing target URL');
@@ -360,6 +374,7 @@ function createApp({ dbPath } = {}) {
       else res.end();
     });
   });
+  server.on('close', () => clearInterval(sweep));
 
   return { server, db };
 }

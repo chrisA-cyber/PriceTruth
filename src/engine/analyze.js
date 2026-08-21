@@ -17,6 +17,12 @@ const VERTICALS = ['hotel', 'flight', 'ticket', 'subscription', 'retail'];
 // Every non-'listed' line must be honest about being a projection; confidence
 // and the disclosures array carry that honesty through to the UI and API.
 
+// Own-property lookup with fallback: user-supplied keys like __proto__ or
+// constructor must hit the fallback profile, never Object.prototype members.
+function ownOr(map, key, fallback) {
+  return typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : map[fallback];
+}
+
 function item(code, label, amount_cents, kind, certainty, note) {
   assertCents(amount_cents, code);
   const it = { code, label, amount_cents, kind, certainty };
@@ -51,7 +57,7 @@ function finishReport({ vertical, advertised_cents, advertisedUnit, truePrice_ce
 }
 
 function analyzeHotel(advertised_cents, ctx) {
-  const market = HOTEL.markets[ctx.market] || HOTEL.markets.default;
+  const market = ownOr(HOTEL.markets, ctx.market, 'default');
   const nights = Number.isInteger(ctx.nights) && ctx.nights >= 1 && ctx.nights <= 60 ? ctx.nights : 1;
   const assumptions = [];
   const disclosures = [];
@@ -108,7 +114,7 @@ function analyzeHotel(advertised_cents, ctx) {
 }
 
 function analyzeFlight(advertised_cents, ctx) {
-  const carrier = FLIGHT.carriers[ctx.carrier] || FLIGHT.carriers.typical_lcc;
+  const carrier = ownOr(FLIGHT.carriers, ctx.carrier, 'typical_lcc');
   const assumptions = [];
   const disclosures = [];
   const items = [item('fare', `Base fare (${carrier.label})`, advertised_cents, 'base', 'listed')];
@@ -176,7 +182,7 @@ function analyzeFlight(advertised_cents, ctx) {
 }
 
 function analyzeTicket(advertised_cents, ctx) {
-  const platform = TICKET.platforms[ctx.platform] || TICKET.platforms.default;
+  const platform = ownOr(TICKET.platforms, ctx.platform, 'default');
   const qty = Number.isInteger(ctx.quantity) && ctx.quantity >= 1 && ctx.quantity <= 20 ? ctx.quantity : 1;
   const assumptions = [];
   const disclosures = [];
@@ -230,13 +236,12 @@ function analyzeTicket(advertised_cents, ctx) {
 }
 
 function analyzeSubscription(advertised_cents, ctx) {
-  const pattern = SUBSCRIPTION.patterns[ctx.pattern] || SUBSCRIPTION.patterns.default;
+  const pattern = ownOr(SUBSCRIPTION.patterns, ctx.pattern, 'default');
   const assumptions = [];
   const disclosures = [];
 
-  const introMonths = Number.isInteger(ctx.introMonths) && ctx.introMonths >= 0 && ctx.introMonths <= 12
-    ? ctx.introMonths : pattern.introMonthsTypical;
-  const introListed = Number.isInteger(ctx.introMonths);
+  const introListed = Number.isInteger(ctx.introMonths) && ctx.introMonths >= 0 && ctx.introMonths <= 12;
+  const introMonths = introListed ? ctx.introMonths : pattern.introMonthsTypical;
 
   let renewal;
   let renewalCertainty;

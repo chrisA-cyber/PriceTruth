@@ -13,12 +13,16 @@ function assertCents(v, name = 'amount') {
 }
 
 // pct is a plain number like 13.38 (percent, not fraction). Round half-up.
+// BigInt keeps exact half-cent products (e.g. 1500 × 5.1% = 76.5) from landing
+// a hair below the boundary the way float multiplication does; pct is honored
+// to 4 decimal places.
 function pctOf(cents, pct) {
   assertCents(cents, 'pctOf base');
   if (typeof pct !== 'number' || !Number.isFinite(pct) || pct < 0 || pct > 1000) {
     throw new RangeError(`pct out of range: ${pct}`);
   }
-  return Math.floor((cents * pct) / 100 + 0.5);
+  const pctScaled = BigInt(Math.round(pct * 10_000));
+  return Number((BigInt(cents) * pctScaled + 500_000n) / 1_000_000n);
 }
 
 function sum(items) {

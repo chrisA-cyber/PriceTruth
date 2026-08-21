@@ -283,8 +283,10 @@ control-character caveat on the logged path).
 Local SQLite file (`data/pricetruth.db` by default, `PRICETRUTH_DB` overrides —
 `src/db.js open`) in WAL mode. The DB and its WAL/SHM sidecars are gitignored
 (`.gitignore`), as are `.env*` files, so neither user data nor local secrets can be committed.
-Demo data is deterministic synthetic history (`src/seed.js`, seeded LCG) and is labeled
-`demoData: true` in API responses.
+Demo data is deterministic synthetic history (`src/seed.js`, seeded LCG). Every product-backed
+API response — public (`/api/products`, `/api/products/:id`) and B2B (`/api/v1/products/:id`,
+`/api/v1/track`) — carries `demoData: true`. The `/api/analyze` and `/api/v1/analyze` routes
+compute on caller-supplied inputs (not seeded data) and so carry no demo flag.
 
 ## 4. Honest gaps & production TODOs
 

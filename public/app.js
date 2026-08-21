@@ -300,8 +300,20 @@
         el('td', { class: 'amount' }, fmtUSD(it.amount_cents)));
     });
 
-    const totalLabel = report.total ? report.total.label : `True price ${unitLabel(report.truePrice.unit)}`.trim();
-    const totalCents = report.total ? report.total.amount_cents : report.truePrice.amount_cents;
+    // The Amount column sums to the per-unit true price, so the first footer
+    // row must be that sum (never the multi-unit rollup). When a rollup exists
+    // (e.g. a 3-night stay), it gets its own clearly-labeled second row.
+    const sumLabel = `True price ${unitLabel(report.truePrice.unit)}`.trim();
+    const footRows = [
+      el('tr', null,
+        el('td', { colspan: '3' }, sumLabel),
+        el('td', { class: 'amount' }, fmtUSD(report.truePrice.amount_cents))),
+    ];
+    if (report.total) {
+      footRows.push(el('tr', { class: 'foot-rollup' },
+        el('td', { colspan: '3' }, report.total.label),
+        el('td', { class: 'amount' }, fmtUSD(report.total.amount_cents))));
+    }
 
     return el('div', { class: 'table-wrap' },
       el('table', { class: 'breakdown' },
@@ -312,9 +324,7 @@
           el('th', { scope: 'col' }, 'Source'),
           el('th', { scope: 'col', class: 'amount' }, 'Amount'))),
         el('tbody', null, rows),
-        el('tfoot', null, el('tr', null,
-          el('td', { colspan: '3' }, totalLabel),
-          el('td', { class: 'amount' }, fmtUSD(totalCents))))));
+        el('tfoot', null, footRows)));
   }
 
   function assumptionsFold(report) {
