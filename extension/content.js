@@ -19,7 +19,11 @@
   var FM = window.PTFeeModel;
   if (!FM) return; // fee model must load first (manifest js order)
 
+  // APP_URL and PT_DEMO_HOST are rewritten when the extension is downloaded
+  // from a deployed PriceTruth site, so its links and its on-site demo point
+  // back at wherever it came from. The defaults make a locally-run copy work.
   var APP_URL = 'http://localhost:4780';
+  var PT_DEMO_HOST = 'localhost';
   var MAX_NODES = 5000;
   var RETRY_DELAYS_MS = [1200, 3500]; // late-rendering SPAs get two more looks
 
@@ -45,6 +49,9 @@
     if (hostMatches(hostname, 'stubhub.com')) return { vertical: 'ticket', profile: 'stubhub', site: 'StubHub', demo: false };
     if (hostMatches(hostname, 'spirit.com')) return { vertical: 'flight', profile: 'spirit', site: 'Spirit', demo: false };
     if (hostMatches(hostname, 'example.com')) return { vertical: 'hotel', profile: 'default', site: 'example.com', demo: true };
+    // The PriceTruth site's own demo page (see manifest matches, scoped to
+    // /extension-demo.html) is treated as a Las Vegas hotel listing.
+    if (PT_DEMO_HOST && hostMatches(hostname, PT_DEMO_HOST)) return { vertical: 'hotel', profile: 'las_vegas', site: 'PriceTruth demo', demo: true };
     return null;
   }
 

@@ -19,4 +19,5 @@ if (path.basename(process.argv[1] || '') !== 'index.js') {
   require('./engine.test.js');
   require('./security.test.js');
   require('./api.test.js');
+  require('./extzip.test.js');
 }

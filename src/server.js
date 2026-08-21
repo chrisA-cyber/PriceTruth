@@ -10,8 +10,10 @@ const { seed } = require('./seed');
 const { analyze, VERTICALS } = require('./engine/analyze');
 const { dealQuality } = require('./engine/score');
 const { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml } = require('./security');
+const { zip } = require('./extzip');
 
 const PKG = require('../package.json');
+const EXTENSION_DIR = path.join(__dirname, '..', 'extension');
 const HOTEL = require('./data/fees/hotel.json');
 const FLIGHT = require('./data/fees/flight.json');
 const TICKET = require('./data/fees/ticket.json');
@@ -119,6 +121,50 @@ PriceTruth may earn a commission at no extra cost to you. That never changes the
 </main></body></html>`;
 }
 
+// The extension is downloadable as a .zip built on demand. When served from a
+// deployed site we rewrite the extension's app URL and demo-host so the copy a
+// user installs links back to *this* site and its on-site demo, instead of the
+// localhost default baked into the source.
+const EXTENSION_FILES = ['manifest.json', 'feemodel.js', 'content.js', 'overlay.css', 'popup.html', 'popup.js', 'popup.css', 'README.md'];
+const extZipCache = new Map(); // origin -> Buffer
+
+function buildExtensionZip(origin, hostname) {
+  const cached = extZipCache.get(origin);
+  if (cached) return cached;
+
+  const entries = EXTENSION_FILES.map((name) => {
+    let data = fs.readFileSync(path.join(EXTENSION_DIR, name), 'utf8');
+    if (name === 'content.js') {
+      data = data
+        .replace("var APP_URL = 'http://localhost:4780';", `var APP_URL = '${origin}';`)
+        .replace("var PT_DEMO_HOST = 'localhost';", `var PT_DEMO_HOST = '${hostname}';`);
+    } else if (name === 'popup.html') {
+      data = data.replaceAll('http://localhost:4780', origin);
+    } else if (name === 'manifest.json') {
+      const m = JSON.parse(data);
+      const pattern = `*://${hostname}/extension-demo.html*`;
+      const matches = m.content_scripts[0].matches;
+      if (!matches.includes(pattern)) matches.push(pattern);
+      data = JSON.stringify(m, null, 2);
+    }
+    return { name: `pricetruth-extension/${name}`, data };
+  });
+
+  const buf = zip(entries);
+  if (extZipCache.size < 32) extZipCache.set(origin, buf);
+  return buf;
+}
+
+// Derive a safe origin (scheme://host) from the request, honoring the proxy's
+// X-Forwarded-Proto (Render/Railway terminate TLS in front of us).
+function requestOrigin(req) {
+  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost');
+  const host = /^[a-z0-9.\-]+(:\d+)?$/i.test(rawHost) ? rawHost : 'localhost';
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = xfProto === 'https' ? 'https' : xfProto === 'http' ? 'http' : 'http';
+  return { origin: `${proto}://${host}`, hostname: host.split(':')[0] };
+}
+
 function createApp({ dbPath } = {}) {
   const db = open(dbPath);
   if (db.listProducts().length === 0) seed(db);
@@ -156,7 +202,7 @@ function createApp({ dbPath } = {}) {
       }
       isApi = pathname.startsWith('/api/');
       if (isApi) res.setHeader('Cache-Control', 'no-store');
-      if (isApi || pathname.startsWith('/go/')) {
+      if (isApi || pathname.startsWith('/go/') || pathname.startsWith('/download/')) {
         const limiter = req.method === 'GET' ? readLimiter : writeLimiter;
         const rl = limiter.check(ip);
         if (!rl.ok) {
@@ -171,6 +217,8 @@ function createApp({ dbPath } = {}) {
         await handleApi(req, res, url, pathname);
       } else if (pathname.startsWith('/go/')) {
         handleAffiliate(res, url, pathname);
+      } else if (pathname === '/download/extension.zip') {
+        handleExtensionDownload(req, res);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         serveStatic(req, res, pathname);
       } else {
@@ -322,6 +370,20 @@ function createApp({ dbPath } = {}) {
     }
   }
 
+  function handleExtensionDownload(req, res) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'method not allowed');
+    const { origin, hostname } = requestOrigin(req);
+    const buf = buildExtensionZip(origin, hostname);
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Length': buf.length,
+      'Content-Disposition': 'attachment; filename="pricetruth-extension.zip"',
+      'Cache-Control': 'no-store',
+    });
+    if (req.method === 'HEAD') return res.end();
+    res.end(buf);
+  }
+
   function handleAffiliate(res, url, pathname) {
     const partnerId = pathname.slice('/go/'.length);
     // Object.hasOwn guard: prototype keys like __proto__ must 404, not resolve.
@@ -381,8 +443,18 @@ function createApp({ dbPath } = {}) {
 
 if (require.main === module) {
   const { server, db } = createApp();
-  // Loopback by default; set HOST=0.0.0.0 explicitly (behind TLS) to expose.
-  const HOST = process.env.HOST || '127.0.0.1';
+  // Bind loopback locally so a dev box is never exposed to the LAN. On a hosted
+  // platform (Render/Railway/Fly/Heroku set their own PORT, and Render sets
+  // RENDER=true; NODE_ENV=production is the general signal) the app MUST bind
+  // 0.0.0.0 or the platform's port scan finds nothing and fails the deploy.
+  // An explicit HOST always wins.
+  const onHost =
+    !!process.env.RENDER ||
+    process.env.NODE_ENV === 'production' ||
+    !!process.env.RAILWAY_ENVIRONMENT ||
+    !!process.env.FLY_APP_NAME ||
+    !!process.env.DYNO; // Heroku
+  const HOST = process.env.HOST || (onHost ? '0.0.0.0' : '127.0.0.1');
   server.listen(PORT, HOST, () => {
     console.log(`PriceTruth listening on http://${HOST}:${PORT}`);
   });

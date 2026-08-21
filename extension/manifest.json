@@ -17,7 +17,8 @@
         "*://*.stubhub.com/*",
         "*://*.spirit.com/*",
         "*://example.com/*",
-        "*://*.example.com/*"
+        "*://*.example.com/*",
+        "*://localhost/extension-demo.html*"
       ],
       "js": ["feemodel.js", "content.js"],
       "css": ["overlay.css"],

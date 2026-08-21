@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Extension demo — PriceTruth</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="/favicon.svg">
+  <style>
+    .demo-banner { background: var(--accent-soft, #e6f7f4); border-bottom: 1px solid var(--border); padding: 0.85rem 1rem; text-align: center; font-size: 0.92rem; }
+    .listing { max-width: 60rem; margin: 1.5rem auto; padding: 0 1.25rem; }
+    .mock-site { font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 0.75rem; }
+    .hotel-card { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1.5rem; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--surface); }
+    @media (max-width: 640px) { .hotel-card { grid-template-columns: 1fr; } }
+    .hotel-photo { min-height: 220px; background: linear-gradient(135deg, #14b8a6 0%, #0f766e 55%, #134e4a 100%); position: relative; }
+    .hotel-photo span { position: absolute; left: 1rem; bottom: 1rem; color: #fff; font-size: 0.78rem; background: rgba(0,0,0,0.35); padding: 0.25rem 0.6rem; border-radius: 999px; }
+    .hotel-body { padding: 1.5rem 1.5rem 1.75rem; display: flex; flex-direction: column; }
+    .hotel-body h1 { font-size: 1.45rem; margin: 0 0 0.25rem; }
+    .stars { color: #f59e0b; letter-spacing: 0.1em; font-size: 0.95rem; }
+    .loc { color: var(--text-soft); font-size: 0.9rem; margin: 0.35rem 0 1rem; }
+    .price-block { margin-top: auto; }
+    .rate-label { font-size: 0.8rem; color: var(--text-soft); }
+    .rate-amount { font-size: 2.6rem; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+    .rate-unit { font-size: 0.95rem; color: var(--text-soft); font-weight: 500; }
+    .book-btn { margin-top: 1rem; display: inline-block; background: var(--accent, #0d9488); color: #fff; border: 0; padding: 0.7rem 1.4rem; border-radius: 10px; font-weight: 600; font-size: 1rem; cursor: pointer; }
+    .fineprint { font-size: 0.75rem; color: var(--text-faint); margin-top: 0.75rem; }
+    .explain { max-width: 60rem; margin: 2rem auto; padding: 1.25rem 1.5rem; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
+    .explain h2 { margin-top: 0; font-size: 1.05rem; }
+    .explain a { color: var(--accent, #0d9488); }
+  </style>
+</head>
+<body>
+  <div class="demo-banner">
+    <strong>Demo page.</strong> This is a fake hotel listing. With the PriceTruth extension installed, its true-price badge appears bottom-right.
+    <a href="/extension">Get the extension →</a>
+  </div>
+
+  <div class="listing">
+    <p class="mock-site">Demo Bookings · search results</p>
+    <div class="hotel-card">
+      <div class="hotel-photo"><span>Strip view · pool · casino</span></div>
+      <div class="hotel-body">
+        <h1>The Meridian Grand</h1>
+        <div class="stars">★★★★☆</div>
+        <p class="loc">Las Vegas Strip, Nevada · 0.2 mi from the Fountains</p>
+        <div class="price-block">
+          <div class="rate-label">Our lowest nightly rate</div>
+          <div class="rate-amount">$219</div>
+          <div class="rate-unit">per night · before taxes &amp; fees</div>
+          <button class="book-btn" type="button">Reserve now</button>
+          <p class="fineprint">Rate shown does not include resort fee, taxes, or parking, which are collected at the property.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain">
+      <h2>What should happen</h2>
+      <p>If the extension is installed and enabled, a small <strong>PriceTruth</strong> badge shows in the
+      bottom-right reading roughly <strong>~$317.32/night real</strong> — the $219 rate plus the resort fee,
+      occupancy taxes, and parking a Las Vegas hotel typically adds. Click the badge for the line-by-line
+      breakdown. Every added line is labeled a <em>typical</em> estimate, and the whole thing is computed
+      locally in your browser — the extension makes zero network requests.</p>
+      <p>Don't see it? Make sure you installed and enabled the extension from the
+      <a href="/extension">extension page</a>, then reload this page.</p>
+    </div>
+  </div>
+</body>
+</html>

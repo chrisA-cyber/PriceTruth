@@ -1190,6 +1190,51 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
     return root;
   }
 
+  /* ================= extension ================= */
+
+  function extensionView() {
+    const root = el('div', null);
+    root.append(el('div', { class: 'view-head' },
+      el('h1', null, 'Browser extension'),
+      el('p', { style: 'color:var(--text-soft);max-width:44rem' },
+        'The truth layer at the moment you look at a price. It reads the price already on the page and shows what it will actually cost — computed locally, with ',
+        el('b', null, 'zero network requests'), '. A prototype, so you install it unpacked (free, no store, 30 seconds).')));
+
+    root.append(el('div', { class: 'card', style: 'display:flex;flex-wrap:wrap;gap:1rem;align-items:center;justify-content:space-between' },
+      el('div', null,
+        el('h2', { style: 'margin:0 0 0.25rem' }, 'Get it in two clicks'),
+        el('p', { style: 'margin:0;color:var(--text-soft)' }, 'Download the extension, then load it unpacked in Chrome, Edge, or Brave.')),
+      el('div', { style: 'display:flex;gap:0.6rem;flex-wrap:wrap' },
+        el('a', { class: 'btn', href: '/download/extension.zip', download: 'pricetruth-extension.zip' }, 'Download extension (.zip)'),
+        el('a', { class: 'btn btn-secondary', href: '/extension-demo.html' }, 'Open the live demo'))));
+
+    const step = (n, title, body) =>
+      el('li', { class: 'ext-step' },
+        el('span', { class: 'ext-step-n' }, String(n)),
+        el('div', null, el('b', null, title), el('div', { style: 'color:var(--text-soft);font-size:0.92rem' }, body)));
+
+    root.append(el('section', { style: 'margin-top:1.5rem' },
+      el('h2', null, 'Install it (unpacked)'),
+      el('ol', { class: 'ext-steps' },
+        step(1, 'Download and unzip', 'Grab the .zip above and extract it anywhere — you’ll get a pricetruth-extension folder.'),
+        step(2, 'Open your extensions page', 'Go to chrome://extensions (or edge://extensions, brave://extensions).'),
+        step(3, 'Turn on Developer mode', 'Toggle it on — usually top-right.'),
+        step(4, 'Load unpacked', 'Click “Load unpacked” and pick the pricetruth-extension folder.'),
+        step(5, 'Try it', ['Open the ', el('a', { href: '/extension-demo.html' }, 'live demo page'), ' — the badge appears bottom-right. It also runs on real booking, ticketing, and airline sites.']))));
+
+    root.append(el('section', { style: 'margin-top:1.5rem' },
+      el('h2', null, 'What it does'),
+      el('ul', { class: 'ext-facts' },
+        el('li', null, el('b', null, 'Reads the visible price'), ' on hotel, flight, and ticket pages and adds the fees you’d only see at checkout.'),
+        el('li', null, el('b', null, 'Labels every estimate'), ' — anything beyond the advertised price is marked ', el('code', { class: 'endpoint' }, 'typical'), ' or ', el('code', { class: 'endpoint' }, 'estimated'), ', never presented as a quote.'),
+        el('li', null, el('b', null, 'Sends nothing'), ' — the fee model is bundled; all math runs in your browser. No tracking, no accounts, no server calls.'),
+        el('li', null, el('b', null, 'Stays quiet when unsure'), ' — if no price is confidently detected, it shows nothing.'))));
+
+    root.append(el('p', { style: 'margin-top:1.25rem;font-size:0.85rem;color:var(--text-faint)' },
+      'Prototype notes: install is unpacked (the Chrome Web Store version would need icons and review). Price detection on real sites is heuristic. The downloaded copy links back to this site automatically.'));
+    return root;
+  }
+
   /* ================= 404 ================= */
 
   function notFoundView() {
@@ -1207,6 +1252,7 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
     { pattern: /^\/analyze$/, title: 'Analyzer — PriceTruth', view: () => analyzeView() },
     { pattern: /^\/pricing$/, title: 'Pricing — PriceTruth', view: () => pricingView() },
     { pattern: /^\/api-docs$/, title: 'B2B API — PriceTruth', view: () => apiDocsView() },
+    { pattern: /^\/extension$/, title: 'Browser extension — PriceTruth', view: () => extensionView() },
   ];
 
   function isSpaPath(path) {
