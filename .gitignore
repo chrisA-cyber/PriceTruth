@@ -1,0 +1,10 @@
+# Runtime data (SQLite database lives here; never commit user data)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+node_modules/
+.env
+.env.*
+*.log

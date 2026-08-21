@@ -1,0 +1,13 @@
+{
+  "notes": "Affiliate partner allowlist for /go redirects. Only https URLs whose hostname matches a listed domain (exact or subdomain) are ever redirected to — this is the open-redirect guard. tagParam/tagValue model how an affiliate tag would be appended in production.",
+  "partners": {
+    "booking": { "label": "Booking.com", "domains": ["booking.com"], "tagParam": "aid", "tagValue": "pricetruth-demo" },
+    "expedia": { "label": "Expedia", "domains": ["expedia.com"], "tagParam": "affcid", "tagValue": "pricetruth-demo" },
+    "hotels": { "label": "Hotels.com", "domains": ["hotels.com"], "tagParam": "affcid", "tagValue": "pricetruth-demo" },
+    "kayak": { "label": "Kayak", "domains": ["kayak.com"], "tagParam": "aff", "tagValue": "pricetruth-demo" },
+    "ticketmaster": { "label": "Ticketmaster", "domains": ["ticketmaster.com"], "tagParam": "camefrom", "tagValue": "pricetruth-demo" },
+    "stubhub": { "label": "StubHub", "domains": ["stubhub.com"], "tagParam": "gcid", "tagValue": "pricetruth-demo" },
+    "spirit": { "label": "Spirit Airlines", "domains": ["spirit.com"], "tagParam": "ref", "tagValue": "pricetruth-demo" },
+    "example": { "label": "Example partner (demo)", "domains": ["example.com"], "tagParam": "ref", "tagValue": "pricetruth-demo" }
+  }
+}

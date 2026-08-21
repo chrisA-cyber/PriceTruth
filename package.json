@@ -1,0 +1,18 @@
+{
+  "name": "pricetruth",
+  "version": "0.1.0",
+  "description": "PriceTruth — the actual price of anything online. True-cost breakdowns, price history, and deal quality scores.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node src/seed.js",
+    "keygen": "node src/keygen.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,48 @@
+{
+  "vertical": "hotel",
+  "updated": "2026-08-21",
+  "notes": "Typical mandatory-fee profiles for US hotel markets. Values are cents unless suffixed Pct. 'typical' figures are midpoints of publicly reported ranges; real quotes should override them.",
+  "sources": [
+    "FTC Rule on Unfair or Deceptive Fees (16 CFR Part 464, effective May 2025)",
+    "Published hotel occupancy tax rates by city/state",
+    "NerdWallet & Kayak resort-fee surveys, 2024-2025"
+  ],
+  "markets": {
+    "las_vegas": {
+      "label": "Las Vegas, NV",
+      "resortFee": { "typical_cents": 4500, "range_cents": [3200, 5500], "prevalencePct": 95 },
+      "occupancyTaxPct": 13.38,
+      "taxAppliesToResortFee": true,
+      "parking": { "typical_cents": 1800, "range_cents": [1000, 2500], "prevalencePct": 80 }
+    },
+    "new_york": {
+      "label": "New York, NY",
+      "resortFee": { "typical_cents": 3500, "range_cents": [2000, 5000], "prevalencePct": 55 },
+      "occupancyTaxPct": 14.75,
+      "occupancyFlatPerNight_cents": 350,
+      "taxAppliesToResortFee": true,
+      "parking": { "typical_cents": 6500, "range_cents": [4500, 8500], "prevalencePct": 90 }
+    },
+    "miami": {
+      "label": "Miami, FL",
+      "resortFee": { "typical_cents": 4000, "range_cents": [2500, 5500], "prevalencePct": 75 },
+      "occupancyTaxPct": 13.0,
+      "taxAppliesToResortFee": true,
+      "parking": { "typical_cents": 4200, "range_cents": [2500, 6000], "prevalencePct": 85 }
+    },
+    "orlando": {
+      "label": "Orlando, FL",
+      "resortFee": { "typical_cents": 3500, "range_cents": [2000, 5000], "prevalencePct": 70 },
+      "occupancyTaxPct": 12.5,
+      "taxAppliesToResortFee": true,
+      "parking": { "typical_cents": 2800, "range_cents": [1500, 4000], "prevalencePct": 75 }
+    },
+    "default": {
+      "label": "US average",
+      "resortFee": { "typical_cents": 3000, "range_cents": [1500, 5000], "prevalencePct": 35 },
+      "occupancyTaxPct": 12.0,
+      "taxAppliesToResortFee": true,
+      "parking": { "typical_cents": 2000, "range_cents": [0, 5000], "prevalencePct": 50 }
+    }
+  }
+}

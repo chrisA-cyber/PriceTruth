@@ -1,0 +1,37 @@
+{
+  "vertical": "ticket",
+  "updated": "2026-08-21",
+  "notes": "Event-ticketing checkout fee profiles per platform, per ticket unless noted. Values are cents. Service fees scale with face value; processing is per order.",
+  "sources": [
+    "GAO-18-347 event ticket fee study (avg total fees ~27% of face, up to 58%)",
+    "Platform checkout observations, 2024-2025",
+    "FTC Rule on Unfair or Deceptive Fees (all-in pricing for live events, effective May 2025)"
+  ],
+  "platforms": {
+    "ticketmaster": {
+      "label": "Ticketmaster",
+      "serviceFeePct": 27.5, "serviceFeeRangePct": [15, 40],
+      "facility_cents": 600, "facilityRange_cents": [200, 1500],
+      "orderProcessing_cents": 595, "orderProcessingRange_cents": [295, 895]
+    },
+    "stubhub": {
+      "label": "StubHub (resale)",
+      "serviceFeePct": 30.0, "serviceFeeRangePct": [25, 40],
+      "facility_cents": 0, "facilityRange_cents": [0, 0],
+      "orderProcessing_cents": 0, "orderProcessingRange_cents": [0, 0]
+    },
+    "seatgeek": {
+      "label": "SeatGeek (resale)",
+      "serviceFeePct": 26.0, "serviceFeeRangePct": [20, 35],
+      "facility_cents": 0, "facilityRange_cents": [0, 0],
+      "orderProcessing_cents": 0, "orderProcessingRange_cents": [0, 0]
+    },
+    "default": {
+      "label": "Typical ticketing platform",
+      "serviceFeePct": 27.0, "serviceFeeRangePct": [15, 40],
+      "facility_cents": 500, "facilityRange_cents": [0, 1500],
+      "orderProcessing_cents": 500, "orderProcessingRange_cents": [0, 895]
+    }
+  },
+  "salesTaxPctDefault": 7.0
+}

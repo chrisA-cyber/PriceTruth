@@ -1,0 +1,20 @@
+{
+  "vertical": "subscription",
+  "updated": "2026-08-21",
+  "notes": "Teaser-rate and renewal patterns for consumer subscriptions. Values are cents. renewalMultiple is the typical post-intro price as a multiple of the intro price when the renewal price is unknown.",
+  "sources": [
+    "FTC Negative Option Rule / click-to-cancel (16 CFR Part 425, 2025)",
+    "Published intro vs. standard pricing across streaming, VPN, news, and SaaS, 2024-2025"
+  ],
+  "patterns": {
+    "streaming": { "label": "Streaming media", "introMonthsTypical": 3, "renewalMultiple": 1.6 },
+    "vpn": { "label": "VPN / security", "introMonthsTypical": 12, "renewalMultiple": 2.8 },
+    "news": { "label": "News / publishing", "introMonthsTypical": 6, "renewalMultiple": 4.0 },
+    "fitness": { "label": "Fitness / wellness apps", "introMonthsTypical": 1, "renewalMultiple": 1.8 },
+    "default": { "label": "Typical subscription", "introMonthsTypical": 6, "renewalMultiple": 2.0 }
+  },
+  "commonExtras": {
+    "activationFee": { "typical_cents": 0, "range_cents": [0, 2500], "prevalencePct": 10 },
+    "annualPlanBillingNote": "Many 'per month' prices are billed annually up front."
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "vertical": "flight",
+  "updated": "2026-08-21",
+  "notes": "Ancillary fee profiles per carrier for US domestic one-way travel. Values are cents. Advertised US fares legally include base taxes (DOT full-fare rule); the taxNotIncluded profile models OTA base-fare displays and non-US markets.",
+  "sources": [
+    "Carrier published optional-service fee pages, 2025",
+    "DOT full-fare advertising rule 14 CFR 399.84",
+    "US domestic ticket taxes: 7.5% excise + $5.20 segment fee + $5.60 TSA Sept 11 fee + PFC up to $4.50"
+  ],
+  "carriers": {
+    "spirit": {
+      "label": "Spirit Airlines",
+      "carryOn_cents": 6500, "carryOnRange_cents": [4000, 9900],
+      "checkedBag_cents": 5500, "checkedBagRange_cents": [3500, 8900],
+      "seatSelection_cents": 2500, "seatSelectionRange_cents": [500, 9900],
+      "prevalence": { "carryOnPct": 85, "seatPct": 60 }
+    },
+    "frontier": {
+      "label": "Frontier Airlines",
+      "carryOn_cents": 6000, "carryOnRange_cents": [4000, 9900],
+      "checkedBag_cents": 5500, "checkedBagRange_cents": [3500, 8900],
+      "seatSelection_cents": 2200, "seatSelectionRange_cents": [500, 5500],
+      "prevalence": { "carryOnPct": 85, "seatPct": 60 }
+    },
+    "typical_lcc": {
+      "label": "Typical low-cost carrier",
+      "carryOn_cents": 4500, "carryOnRange_cents": [3000, 9900],
+      "checkedBag_cents": 4500, "checkedBagRange_cents": [3000, 7500],
+      "seatSelection_cents": 3200, "seatSelectionRange_cents": [500, 6000],
+      "prevalence": { "carryOnPct": 80, "seatPct": 55 }
+    },
+    "typical_legacy": {
+      "label": "Typical legacy carrier (basic economy)",
+      "carryOn_cents": 0, "carryOnRange_cents": [0, 0],
+      "checkedBag_cents": 4000, "checkedBagRange_cents": [3500, 4500],
+      "seatSelection_cents": 2000, "seatSelectionRange_cents": [0, 5500],
+      "prevalence": { "carryOnPct": 0, "seatPct": 50 }
+    }
+  },
+  "otaBookingFee": { "typical_cents": 800, "range_cents": [0, 2500] },
+  "usDomesticTaxes": {
+    "excisePct": 7.5,
+    "segmentFee_cents": 520,
+    "securityFee_cents": 560,
+    "passengerFacilityCharge_cents": 450
+  }
+}
