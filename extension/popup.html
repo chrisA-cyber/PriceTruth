@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PriceTruth</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <span class="dot" aria-hidden="true"></span>
+    <h1>PriceTruth</h1>
+    <span class="proto">prototype</span>
+  </header>
+
+  <main>
+    <div class="field">
+      <label for="vertical">What are you buying?</label>
+      <select id="vertical">
+        <option value="hotel" selected>Hotel night</option>
+        <option value="flight">Flight fare</option>
+        <option value="ticket">Event ticket</option>
+        <option value="subscription">Subscription (per month)</option>
+        <option value="retail">Retail item</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="price">Advertised price</label>
+      <div class="money-wrap">
+        <span class="money-sign" aria-hidden="true">$</span>
+        <input id="price" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="219.00" placeholder="0.00">
+      </div>
+    </div>
+
+    <div class="field" id="profile-field">
+      <label for="profile" id="profile-label">Market</label>
+      <select id="profile"></select>
+    </div>
+
+    <section id="result" aria-live="polite"></section>
+  </main>
+
+  <footer>
+    <p class="privacy">Computes locally, sends nothing. This popup makes zero network requests — the fee model is bundled in the extension.</p>
+    <a href="http://localhost:4780" target="_blank" rel="noopener noreferrer">Open PriceTruth &rarr;</a>
+  </footer>
+
+  <script src="feemodel.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

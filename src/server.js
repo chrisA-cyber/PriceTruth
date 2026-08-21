@@ -3,6 +3,7 @@
 const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 const { open } = require('./db');
 const { seed } = require('./seed');
@@ -128,13 +129,21 @@ function createApp({ dbPath } = {}) {
 
   async function handle(req, res) {
     const started = Date.now();
-    const url = new URL(req.url, 'http://localhost');
-    const pathname = decodeURIComponent(url.pathname);
-    const isApi = pathname.startsWith('/api/');
-    applySecurityHeaders(res, { isApi });
     const ip = req.socket.remoteAddress || 'unknown';
+    applySecurityHeaders(res);
+    let pathname = req.url || '/';
+    let isApi = false;
 
     try {
+      let url;
+      try {
+        url = new URL(req.url, 'http://localhost');
+        pathname = decodeURIComponent(url.pathname);
+      } catch {
+        throw new HttpError(400, 'malformed request path');
+      }
+      isApi = pathname.startsWith('/api/');
+      if (isApi) res.setHeader('Cache-Control', 'no-store');
       if (isApi || pathname.startsWith('/go/')) {
         const limiter = req.method === 'GET' ? readLimiter : writeLimiter;
         const rl = limiter.check(ip);
@@ -163,7 +172,9 @@ function createApp({ dbPath } = {}) {
       else if (isApi) sendJson(res, status, { error: message });
       else sendHtml(res, status, `<!doctype html><meta charset="utf-8"><title>${status}</title><h1>${status}</h1><p>${escapeHtml(message)}</p>`);
     } finally {
-      console.log(`${req.method} ${pathname} ${res.statusCode} ${Date.now() - started}ms`);
+      // Sanitized before logging: printable ASCII only, capped length (log-injection guard).
+      const safePath = pathname.replace(/[^\x20-\x7e]/g, '?').slice(0, 200);
+      console.log(`${req.method} ${safePath} ${res.statusCode} ${Date.now() - started}ms`);
     }
   }
 
@@ -196,16 +207,6 @@ function createApp({ dbPath } = {}) {
       const days = url.searchParams.get('days') === '90' ? 90 : 30;
       return sendJson(res, 200, { points: db.getHistory(product.id, days), stats: db.getStats(product.id, days), days });
     }
-    if (req.method === 'POST' && pathname === '/api/track') {
-      const body = await readJsonBody(req);
-      const id = validate.id(body.product_id, 'product_id');
-      const advertised = validate.cents(body.advertised_cents, 'advertised_cents');
-      const product = db.getProduct(id);
-      if (!product) throw new HttpError(404, 'unknown product');
-      const report = analyze({ vertical: product.vertical, advertised_cents: advertised, context: product.context });
-      db.addPricePoint(id, { advertised_cents: advertised, true_cents: report.truePrice.amount_cents });
-      return sendJson(res, 201, { tracked: true, true_cents: report.truePrice.amount_cents });
-    }
     if (req.method === 'POST' && pathname === '/api/alerts') {
       const body = await readJsonBody(req);
       const email = validate.email(body.email);
@@ -229,7 +230,11 @@ function createApp({ dbPath } = {}) {
     }
     if (req.method === 'POST' && pathname === '/api/admin/keys') {
       const adminToken = process.env.ADMIN_TOKEN;
-      if (!adminToken || req.headers['x-admin-token'] !== adminToken) {
+      const provided = req.headers['x-admin-token'];
+      const authed = Boolean(adminToken) && typeof provided === 'string' &&
+        provided.length === adminToken.length &&
+        crypto.timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(adminToken, 'utf8'));
+      if (!authed) {
         throw new HttpError(403, 'admin key minting is disabled; use `npm run keygen` locally');
       }
       const body = await readJsonBody(req);
@@ -257,6 +262,21 @@ function createApp({ dbPath } = {}) {
     if (req.method === 'POST' && pathname === '/api/v1/analyze') {
       const body = await readJsonBody(req);
       return sendJson(res, 200, { ...runAnalyze(body), usage });
+    }
+    if (req.method === 'POST' && pathname === '/api/v1/track') {
+      const body = await readJsonBody(req);
+      const id = validate.id(body.product_id, 'product_id');
+      const advertised = validate.cents(body.advertised_cents, 'advertised_cents');
+      const product = db.getProduct(id);
+      if (!product) throw new HttpError(404, 'unknown product');
+      // Plausibility band: keyed clients still can't poison history with junk points.
+      const ref = product.advertised_cents;
+      if (advertised < Math.floor(ref / 4) || advertised > ref * 4) {
+        throw new HttpError(422, 'price point rejected: outside the plausible band for this product');
+      }
+      const report = analyze({ vertical: product.vertical, advertised_cents: advertised, context: product.context });
+      db.addPricePoint(id, { advertised_cents: advertised, true_cents: report.truePrice.amount_cents });
+      return sendJson(res, 201, { tracked: true, true_cents: report.truePrice.amount_cents, usage });
     }
     const productMatch = pathname.match(/^\/api\/v1\/products\/([a-z0-9-]{1,64})$/);
     if (req.method === 'GET' && productMatch) {
@@ -346,8 +366,10 @@ function createApp({ dbPath } = {}) {
 
 if (require.main === module) {
   const { server, db } = createApp();
-  server.listen(PORT, () => {
-    console.log(`PriceTruth listening on http://localhost:${PORT}`);
+  // Loopback by default; set HOST=0.0.0.0 explicitly (behind TLS) to expose.
+  const HOST = process.env.HOST || '127.0.0.1';
+  server.listen(PORT, HOST, () => {
+    console.log(`PriceTruth listening on http://${HOST}:${PORT}`);
   });
   const shutdown = () => {
     console.log('shutting down…');

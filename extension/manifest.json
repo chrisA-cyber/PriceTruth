@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "PriceTruth — true cost before checkout",
+  "version": "0.1.0",
+  "description": "Shows what a price will actually cost you — typical resort fees, airline ancillaries, and ticket fees — right on the page. Prototype. 100% local: makes zero network requests.",
+  "action": {
+    "default_title": "PriceTruth true-cost calculator",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.booking.com/*",
+        "*://*.hotels.com/*",
+        "*://*.expedia.com/*",
+        "*://*.ticketmaster.com/*",
+        "*://*.stubhub.com/*",
+        "*://*.spirit.com/*",
+        "*://example.com/*",
+        "*://*.example.com/*"
+      ],
+      "js": ["feemodel.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

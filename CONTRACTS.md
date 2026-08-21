@@ -36,7 +36,7 @@ All JSON. Public routes are rate-limited per IP (GET ~120 burst, POST ~20 burst 
 | `GET /api/products` | — | `{products: [ProductPayload], demoData: true}` |
 | `GET /api/products/:id?days=30\|90` | — | `ProductPayload & {history: [{ts, advertised_cents, true_cents}], demoData}` ; 404 unknown |
 | `GET /api/history/:id?days=30\|90` | — | `{points, stats, days}` |
-| `POST /api/track` | `{product_id, advertised_cents}` | 201 `{tracked, true_cents}` |
+| `POST /api/v1/track` | header `X-API-Key`; `{product_id, advertised_cents}` | 201 `{tracked, true_cents, usage}`; 422 outside the 0.25×–4× plausibility band (history-poisoning guard) |
 | `POST /api/alerts` | `{email, product_id, threshold_cents, premium?}` | 201 `{created, note}`; **402** `{error, upgrade}` when free limit (1) hit — this is the premium paywall |
 | `POST /api/admin/keys` | header `X-Admin-Token` = env `ADMIN_TOKEN`; `{label, tier}` | 201 `{key,…}`; 403 if env unset |
 | `POST /api/v1/analyze` | header `X-API-Key`; same body as analyze | `Report & {usage:{used_today, daily_limit, tier}}`; 401 bad key; 429 over quota (starter 100/day, pro 10k/day) |

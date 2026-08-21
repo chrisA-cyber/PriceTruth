@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PriceTruth">
+  <defs>
+    <linearGradient id="tagfill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+  </defs>
+  <!-- price tag pointing to the lower right -->
+  <path fill="url(#tagfill)" d="M10 6h19.5c2.2 0 4.3.87 5.85 2.42l20.2 20.2a7 7 0 0 1 0 9.9L38.5 55.55a7 7 0 0 1-9.9 0l-20.2-20.2A8.27 8.27 0 0 1 6 29.5V10a4 4 0 0 1 4-4z"/>
+  <!-- tag hole -->
+  <circle cx="17.5" cy="17.5" r="4.4" fill="#0b1f33"/>
+  <!-- checkmark -->
+  <path d="M23.5 35.5l7.5 7.5 14.5-14.5" fill="none" stroke="#ffffff" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

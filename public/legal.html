@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legal — PriceTruth (prototype)</title>
+<meta name="description" content="Privacy policy, terms of service, and affiliate disclosure for the PriceTruth prototype.">
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --ink: #1c1917;
+    --muted: #57534e;
+    --accent: #0d9488;
+    --accent-ink: #0f766e;
+    --border: #e7e5e4;
+    --banner-bg: #f0fdfa;
+    --banner-border: #99f6e4;
+    --mark-bg: #fef3c7;
+    --mark-ink: #78350f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0a09;
+      --surface: #1c1917;
+      --ink: #e7e5e4;
+      --muted: #a8a29e;
+      --accent: #2dd4bf;
+      --accent-ink: #5eead4;
+      --border: #292524;
+      --banner-bg: #042f2e;
+      --banner-border: #134e4a;
+      --mark-bg: #451a03;
+      --mark-ink: #fcd34d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.65;
+    font-size: 1rem;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 0 1.25rem 4rem; }
+  .banner {
+    background: var(--banner-bg);
+    border-bottom: 1px solid var(--banner-border);
+    padding: 0.6rem 1.25rem;
+    font-size: 0.875rem;
+    text-align: center;
+    color: var(--muted);
+  }
+  .banner strong { color: var(--accent-ink); }
+  header.site { padding: 2.25rem 0 1rem; }
+  header.site .home {
+    color: var(--accent-ink);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  header.site .home:hover { text-decoration: underline; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0.5rem 0 0.25rem; letter-spacing: -0.02em; }
+  .tagline { color: var(--muted); margin: 0 0 1.25rem; font-size: 0.95rem; }
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 0.5rem;
+    padding: 0.75rem 0 0.25rem;
+    border-top: 1px solid var(--border);
+  }
+  nav.toc a {
+    color: var(--accent-ink);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+  }
+  nav.toc a:hover { border-color: var(--accent); }
+  section.doc {
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 3px solid var(--accent);
+    scroll-margin-top: 1rem;
+  }
+  section.doc > h2 { font-size: 1.5rem; margin: 0 0 0.2rem; letter-spacing: -0.01em; }
+  .meta { color: var(--muted); font-size: 0.85rem; margin: 0 0 1rem; }
+  h3 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+  p { margin: 0.75rem 0; }
+  ul { margin: 0.75rem 0; padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  a { color: var(--accent-ink); }
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 0.5rem;
+    padding: 0.9rem 1.1rem;
+    margin: 1rem 0;
+  }
+  .callout p { margin: 0.35rem 0; }
+  .ph {
+    background: var(--mark-bg);
+    color: var(--mark-ink);
+    border-radius: 0.25rem;
+    padding: 0 0.3rem;
+    font-size: 0.92em;
+    white-space: nowrap;
+  }
+  code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.05rem 0.3rem;
+  }
+  footer.site {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="banner"><strong>Prototype</strong> — PriceTruth is a working prototype with demo data. <span class="ph">[COMPANY ENTITY]</span> and <span class="ph">[CONTACT EMAIL]</span> are placeholders for a real operator. Nothing on this page is legal advice.</div>
+
+<div class="wrap">
+
+<header class="site">
+  <a class="home" href="/">&larr; Back to PriceTruth</a>
+  <h1>Legal</h1>
+  <p class="tagline">Privacy policy, terms of service, and affiliate disclosure for PriceTruth (prototype). Effective 2026-08-21.</p>
+  <nav class="toc">
+    <a href="#privacy">Privacy</a>
+    <a href="#terms">Terms</a>
+    <a href="#affiliate">Affiliate Disclosure</a>
+  </nav>
+</header>
+
+<!-- ================= PRIVACY ================= -->
+<section class="doc" id="privacy">
+  <h2>Privacy Policy</h2>
+  <p class="meta">PriceTruth (prototype), operated by <span class="ph">[COMPANY ENTITY]</span> · contact <span class="ph">[CONTACT EMAIL]</span></p>
+
+  <div class="callout">
+    <p><strong>The short version:</strong> no accounts, no cookies, no trackers, no analytics, no third-party requests. The only personal data this software stores is an <strong>email address</strong>, and only if you choose to create a price alert. We never sell or share personal data. Ask us to delete your alert email and we will.</p>
+  </div>
+
+  <h3>What we collect, and when</h3>
+  <p><strong>Price alerts — the only personal data.</strong> If you create a price alert we store the email address you enter, the product you chose, and your price threshold. That is the entire record, and it is collected only when you submit the alert form. Browsing, analyzing prices, and viewing history collect nothing. In the current prototype, alerts are stored but <strong>no email is ever sent</strong> — no mail provider is connected. A production version would send alerts only after double opt-in confirmation.</p>
+  <p><strong>B2B API keys.</strong> Commercial API users get a key; we store a label they choose, the tier, and a daily usage count. The key itself is stored only as a SHA-256 hash — we cannot recover it and it never appears in logs.</p>
+  <p><strong>What we do <em>not</em> collect:</strong></p>
+  <ul>
+    <li>No accounts, usernames, passwords, or profiles.</li>
+    <li>No cookies of any kind — the server never sets one.</li>
+    <li>No analytics, pixels, fingerprinting, or session recording.</li>
+    <li>No third-party requests: everything is served from our own origin and our Content-Security-Policy blocks the rest. Our server makes no outbound network calls.</li>
+    <li>No IP logging. IPs are used transiently, in memory only, for rate limiting, and are discarded within minutes — never written to disk.</li>
+    <li>No query strings or search terms in logs — only the HTTP method, path, status code, and response time.</li>
+    <li>A <code>no-referrer</code> policy, so outbound clicks do not tell the destination site what you were looking at here.</li>
+  </ul>
+
+  <h3>Why, and on what basis</h3>
+  <p>The alert email exists for exactly one purpose: sending you the alert you asked for. No marketing, no enrichment, no combining with other data (there is no other data). Where GDPR-style analysis applies, the lawful basis is <strong>consent</strong>: you typed your email into the alert form. You can withdraw it any time by asking us to delete the alert.</p>
+
+  <h3>Where it lives</h3>
+  <p>All data sits in a local SQLite database file on the machine running the prototype. No cloud databases, no third-party processors, no international transfers.</p>
+
+  <h3>No sale, no sharing</h3>
+  <p>We do not sell personal information and do not share it with third parties — not with advertisers, data brokers, or affiliate partners. Affiliate links carry a partner tag, never your personal data.</p>
+
+  <h3>Retention and deletion</h3>
+  <p>Alert records are kept while the alert is active; the prototype has no automated retention schedule yet, and a production deployment would define and publish one. <strong>Deletion on request:</strong> email <span class="ph">[CONTACT EMAIL]</span> from the address on the alert and we delete every record tied to it.</p>
+
+  <h3>Your rights — GDPR</h3>
+  <p>This prototype is not marketed to the EU public, but we honor GDPR principles by design: <strong>access</strong> (ask, and we will tell you exactly what we hold — at most your address, alert product, and threshold) and <strong>erasure</strong> (ask, and we delete it). There is no profiling, no automated decision-making with legal effect, and no special-category data. A production EU-facing deployment would name a controller and processors and provide a supervisory-authority complaint route.</p>
+
+  <h3>Your rights — CCPA/CPRA</h3>
+  <p>The prototype does not meet CCPA business thresholds, but our practices already exceed its requirements: we do not sell personal information and do not &ldquo;share&rdquo; it for cross-context behavioral advertising — there is nothing to opt out of. Right to know and right to delete are honored via <span class="ph">[CONTACT EMAIL]</span>, and we never discriminate for exercising them.</p>
+
+  <h3>Children's privacy</h3>
+  <p>PriceTruth is not directed to children under 13 (or the applicable age in your region) and we do not knowingly collect their information. If you believe a child submitted an email address, contact us and we will delete it.</p>
+
+  <h3>Changes</h3>
+  <p>If the prototype grows into a product this policy will change — a production version adds a mail provider, double opt-in, and a real retention schedule. Changes are posted here with a new effective date; material changes to how alert emails are used would require fresh consent.</p>
+</section>
+
+<!-- ================= TERMS ================= -->
+<section class="doc" id="terms">
+  <h2>Terms of Service</h2>
+  <p class="meta">PriceTruth (prototype), operated by <span class="ph">[COMPANY ENTITY]</span> · contact <span class="ph">[CONTACT EMAIL]</span></p>
+
+  <h3>1. What PriceTruth is</h3>
+  <p>PriceTruth shows <strong>price estimates and price history for information only</strong>: it takes an advertised price and projects the true cost — the total you would likely pay after typical fees, taxes, and add-ons — with history and a deal-quality score. By using the site or API you accept these terms.</p>
+
+  <h3>2. Accuracy disclaimer — read this one</h3>
+  <div class="callout">
+    <p><strong>PriceTruth produces estimates, not quotes.</strong> Every line item is labeled <code>listed</code> (supplied by you or the seller), <code>typical</code> (market-typical from our datasets), or <code>estimated</code> (a computed heuristic). <strong>Any line labeled typical or estimated is a projection and may differ — sometimes materially — from what a specific seller actually charges.</strong> Every report carries a confidence value and its assumptions; read them. The prototype ships with labeled demo data.</p>
+    <p><strong>The only price that matters is the one on the seller's checkout page at the moment you pay. Always verify there before buying.</strong></p>
+  </div>
+  <p>PriceTruth is not the seller, has no control over sellers' prices, and does not guarantee that any price, fee, tax, availability, or score is accurate, complete, or current.</p>
+
+  <h3>3. Not advice</h3>
+  <p>Nothing here is financial, investment, purchasing, or tax advice, or a recommendation to buy or not buy anything. Deal-quality scores are an automated summary of price history and fee load, not a judgment about what you should do. Your decisions are your own.</p>
+
+  <h3>4. No warranty</h3>
+  <p>The service is provided <strong>&ldquo;as is&rdquo; and &ldquo;as available&rdquo;</strong>, without warranty of any kind, express or implied, including merchantability, fitness for a particular purpose, accuracy, and non-infringement. This is a prototype; expect rough edges, resets, and downtime.</p>
+
+  <h3>5. Limitation of liability</h3>
+  <p>To the maximum extent permitted by law, <span class="ph">[COMPANY ENTITY]</span> and its contributors are not liable for indirect, incidental, special, consequential, or punitive damages, or lost profits, savings, data, or goodwill — including purchase decisions made in reliance on estimates, scores, or history. Where liability cannot be excluded, it is capped at the greater of what you paid us in the prior twelve months (for the free prototype: zero) and US $50. Some jurisdictions do not allow these exclusions, so parts may not apply to you.</p>
+
+  <h3>6. Acceptable use</h3>
+  <ul>
+    <li>No scraping, bulk harvesting, or automated traffic beyond the documented, enforced rate limits (requests over the limit receive HTTP 429 — back off).</li>
+    <li>No circumventing rate limits, quotas, API-key controls, or any security measure.</li>
+    <li>No sharing, reselling, or publishing an API key, and no using someone else's.</li>
+    <li>No misrepresenting PriceTruth output as a seller's official price or a quote.</li>
+    <li>No unlawful use, and no building services that mislead consumers about prices — the exact thing this project exists to fix.</li>
+  </ul>
+
+  <h3>7. Price alerts</h3>
+  <p>Creating an alert stores your email and threshold as described in the <a href="#privacy">Privacy Policy</a>. In the prototype no email is sent. Free usage is limited (currently one alert); the premium tier shown in the product is a demo of the intended paywall — no payment is collected.</p>
+
+  <h3>8. B2B API</h3>
+  <p>Commercial API access is governed by these terms plus the API documentation, which covers tiers, daily quotas, and key handling. Keys are shown once and stored only as hashes; keep yours secret. We may throttle, suspend, or revoke keys that exceed quota or violate section 6. Production B2B use would be covered by a separate signed agreement.</p>
+
+  <h3>9. Affiliate links and third-party sites</h3>
+  <p>Outbound partner links pass through an interstitial that discloses our affiliate relationship (see the <a href="#affiliate">Affiliate Disclosure</a>). Third-party sites have their own terms and policies; we are not responsible for them.</p>
+
+  <h3>10. Intellectual property</h3>
+  <p>The PriceTruth software, datasets, and content belong to <span class="ph">[COMPANY ENTITY]</span> or its licensors. Sellers' names and trademarks belong to their owners; their appearance here identifies whose prices are analyzed and implies no affiliation or endorsement.</p>
+
+  <h3>11. Termination and changes</h3>
+  <p>We may suspend or terminate access (including revoking API keys) for violations, abuse, or legal necessity. We may update these terms as the prototype evolves; the current version with its effective date is always at this page, and continued use is acceptance.</p>
+
+  <h3>12. Governing law</h3>
+  <p>These terms are governed by the laws of <span class="ph">[GOVERNING LAW JURISDICTION]</span>, with disputes belonging to the courts of <span class="ph">[VENUE]</span> — placeholders until a real entity exists.</p>
+</section>
+
+<!-- ================= AFFILIATE ================= -->
+<section class="doc" id="affiliate">
+  <h2>Affiliate Disclosure</h2>
+  <p class="meta">Per the FTC Endorsement Guides (16 CFR Part 255): if a link can earn us money, you get told before you rely on it.</p>
+
+  <div class="callout">
+    <p><strong>If you click through to a partner site from PriceTruth and then book or buy, PriceTruth may earn a commission, at no extra cost to you.</strong> That is a &ldquo;material connection&rdquo; under FTC rules, and this page — plus the interstitial you always see before leaving — is how we disclose it.</p>
+  </div>
+
+  <h3>How our outbound links work</h3>
+  <ul>
+    <li>Every partner link goes through our own <code>/go</code> route, never directly to the partner.</li>
+    <li>Clicking one <strong>always</strong> shows an interstitial first: it says where you are going and repeats the disclosure before you continue. It is unavoidable — not buried in a footer or behind a hover.</li>
+    <li>The continue link carries <code>rel="sponsored nofollow noopener"</code>, marking it as compensated for search engines.</li>
+    <li>Only an allowlist of known partners can be linked, only over HTTPS, and the affiliate tag identifies PriceTruth — it contains nothing about you. Our no-referrer policy means the partner is not even told which page you came from.</li>
+  </ul>
+
+  <h3>Commissions never touch the numbers</h3>
+  <p><strong>True-cost breakdowns, fee estimates, price history, and deal-quality scores are computed before, and completely independently of, any partner relationship.</strong> The analysis engine's inputs are the advertised price, the vertical, and our fee datasets; scoring inputs are recorded price history and fee load. Partner status is not an input to either — there is no code path by which being (or not being) a partner changes a number we show. Partners cannot pay for a better score, a lower true price, a hidden fee line, or placement. If a partner's price is a bad deal, the score says so.</p>
+
+  <h3>Prototype status</h3>
+  <p>PriceTruth is currently a prototype: affiliate tags in the demo build are placeholders and <strong>no live commission agreements exist yet</strong>. We disclose as if the links were live because the mechanism is built and the habit matters. If real programs are signed, this page will name them — and the disclosure flow above is already in place on day one.</p>
+</section>
+
+<footer class="site">
+  <p>PriceTruth (prototype) · full documents live in the project repo under <code>docs/legal/</code> · <a href="/">Back to PriceTruth</a></p>
+</footer>
+
+</div>
+</body>
+</html>
