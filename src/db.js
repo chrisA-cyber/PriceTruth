@@ -44,7 +44,43 @@ CREATE TABLE IF NOT EXISTS api_usage (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (key_id, day)
 );
+CREATE TABLE IF NOT EXISTS accounts (
+  email TEXT PRIMARY KEY,
+  plan TEXT NOT NULL DEFAULT 'free',
+  stripe_customer TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS billing_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  type TEXT NOT NULL,
+  email TEXT,
+  plan TEXT,
+  amount_cents INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'usd',
+  livemode INTEGER NOT NULL DEFAULT 0,
+  stripe_ref TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_billing_ts ON billing_events(ts);
+-- Raw API keys minted by a paid checkout are held here transiently so the
+-- buyer's success page can reveal the key exactly once, then it is deleted.
+-- Only a SHA-256 hash ever persists in api_keys; this table is swept on a TTL.
+CREATE TABLE IF NOT EXISTS pending_keys (
+  session_id TEXT PRIMARY KEY,
+  raw_key TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
+
+// Idempotent, best-effort column adds for databases created before these
+// columns existed. CREATE TABLE IF NOT EXISTS never alters an existing table,
+// so a long-lived prod db needs these to gain key-ownership tracking.
+const MIGRATIONS = [
+  "ALTER TABLE api_keys ADD COLUMN owner_email TEXT",
+  "ALTER TABLE api_keys ADD COLUMN stripe_ref TEXT",
+];
 
 function open(dbPath = process.env.PRICETRUTH_DB || DEFAULT_PATH) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -52,6 +88,9 @@ function open(dbPath = process.env.PRICETRUTH_DB || DEFAULT_PATH) {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  for (const stmt of MIGRATIONS) {
+    try { db.exec(stmt); } catch { /* column already exists — expected on repeat opens */ }
+  }
   return wrap(db);
 }
 
@@ -79,11 +118,39 @@ function wrap(db) {
     latestPoint: db.prepare('SELECT ts, advertised_cents, true_cents FROM price_points WHERE product_id = ? ORDER BY ts DESC LIMIT 1'),
     insertAlert: db.prepare('INSERT INTO alerts (email, product_id, threshold_cents, created_at) VALUES (?, ?, ?, ?)'),
     countAlertsByEmail: db.prepare('SELECT COUNT(*) AS n FROM alerts WHERE email = ?'),
-    insertKey: db.prepare('INSERT INTO api_keys (key_hash, label, tier, created_at) VALUES (?, ?, ?, ?)'),
+    insertKey: db.prepare('INSERT INTO api_keys (key_hash, label, tier, owner_email, stripe_ref, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
     findKey: db.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND revoked = 0'),
     bumpUsage: db.prepare(`INSERT INTO api_usage (key_id, day, count) VALUES (?, ?, 1)
       ON CONFLICT(key_id, day) DO UPDATE SET count = count + 1`),
     getUsage: db.prepare('SELECT count FROM api_usage WHERE key_id = ? AND day = ?'),
+
+    // accounts / entitlements
+    upsertAccount: db.prepare(`INSERT INTO accounts (email, plan, stripe_customer, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET plan=excluded.plan,
+        stripe_customer=COALESCE(excluded.stripe_customer, accounts.stripe_customer), updated_at=excluded.updated_at`),
+    getAccount: db.prepare('SELECT * FROM accounts WHERE email = ?'),
+
+    // billing events (revenue ledger)
+    insertBilling: db.prepare(`INSERT OR IGNORE INTO billing_events (ts, type, email, plan, amount_cents, currency, livemode, stripe_ref)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+    revenueTotals: db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents),0) AS gross_cents FROM billing_events WHERE amount_cents > 0`),
+    revenueSince: db.prepare('SELECT COALESCE(SUM(amount_cents),0) AS cents FROM billing_events WHERE amount_cents > 0 AND ts >= ?'),
+    recentBilling: db.prepare('SELECT ts, type, plan, amount_cents, currency, livemode FROM billing_events ORDER BY ts DESC LIMIT ?'),
+    activePlanCounts: db.prepare("SELECT plan, COUNT(*) AS n FROM accounts WHERE plan != 'free' GROUP BY plan"),
+
+    // pending (once-shown) API keys from paid checkout
+    putPending: db.prepare('INSERT OR REPLACE INTO pending_keys (session_id, raw_key, tier, created_at) VALUES (?, ?, ?, ?)'),
+    getPending: db.prepare('SELECT raw_key, tier FROM pending_keys WHERE session_id = ?'),
+    delPending: db.prepare('DELETE FROM pending_keys WHERE session_id = ?'),
+    prunePending: db.prepare('DELETE FROM pending_keys WHERE created_at < ?'),
+
+    // admin metrics
+    keyCountsByTier: db.prepare('SELECT tier, COUNT(*) AS n FROM api_keys WHERE revoked = 0 GROUP BY tier'),
+    apiCallsSince: db.prepare('SELECT COALESCE(SUM(count),0) AS n FROM api_usage WHERE day >= ?'),
+    alertCount: db.prepare('SELECT COUNT(*) AS n FROM alerts'),
+    productCount: db.prepare('SELECT COUNT(*) AS n FROM products'),
+    pricePointCount: db.prepare('SELECT COUNT(*) AS n FROM price_points'),
   };
 
   function sinceIso(days) {
@@ -127,9 +194,9 @@ function wrap(db) {
     },
 
     // Returns the raw key exactly once; only its SHA-256 is stored.
-    createApiKey(label, tier = 'starter') {
+    createApiKey(label, tier = 'starter', { ownerEmail = null, stripeRef = null } = {}) {
       const raw = `pt_${tier}_${crypto.randomBytes(24).toString('base64url')}`;
-      stmts.insertKey.run(sha256(raw), label, tier, nowIso());
+      stmts.insertKey.run(sha256(raw), label, tier, ownerEmail, stripeRef, nowIso());
       return raw;
     },
     findApiKey(rawKey) {
@@ -140,6 +207,67 @@ function wrap(db) {
       const day = new Date().toISOString().slice(0, 10);
       stmts.bumpUsage.run(keyId, day);
       return stmts.getUsage.get(keyId, day).count;
+    },
+
+    // ---- accounts / entitlements ----
+    upsertAccount({ email, plan = 'free', stripeCustomer = null }) {
+      const now = nowIso();
+      stmts.upsertAccount.run(email, plan, stripeCustomer, now, now);
+    },
+    getAccount(email) {
+      return stmts.getAccount.get(email) || null;
+    },
+    // The one source of truth for "is this email entitled to premium?".
+    isPremium(email) {
+      const acct = stmts.getAccount.get(email);
+      return Boolean(acct && acct.plan === 'premium');
+    },
+
+    // ---- billing ledger ----
+    // stripe_ref is UNIQUE, so replaying the same webhook event is a no-op:
+    // the INSERT OR IGNORE keeps revenue from being double-counted.
+    recordBillingEvent({ type, email = null, plan = null, amount_cents = 0, currency = 'usd', livemode = 0, stripe_ref = null }) {
+      stmts.insertBilling.run(nowIso(), type, email, plan, amount_cents, currency, livemode ? 1 : 0, stripe_ref);
+    },
+    revenueSummary(recent = 10) {
+      const totals = stmts.revenueTotals.get();
+      const since = (days) => stmts.revenueSince.get(sinceIso(days)).cents;
+      return {
+        gross_cents: totals.gross_cents,
+        paid_events: totals.n,
+        last_30d_cents: since(30),
+        last_7d_cents: since(7),
+        recent: stmts.recentBilling.all(recent),
+        active_plans: stmts.activePlanCounts.all(),
+      };
+    },
+
+    // ---- pending (once-shown) keys ----
+    putPendingKey(sessionId, rawKey, tier) {
+      stmts.putPending.run(sessionId, rawKey, tier, nowIso());
+    },
+    // Returns { raw_key, tier } once, then deletes it (claim-once semantics).
+    takePendingKey(sessionId) {
+      const row = stmts.getPending.get(sessionId);
+      if (!row) return null;
+      stmts.delPending.run(sessionId);
+      return row;
+    },
+    prunePendingKeys(ttlMs = 24 * 60 * 60 * 1000) {
+      stmts.prunePending.run(new Date(Date.now() - ttlMs).toISOString());
+    },
+
+    // ---- admin metrics ----
+    metrics() {
+      const day = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+      return {
+        keys_by_tier: stmts.keyCountsByTier.all(),
+        api_calls_today: stmts.apiCallsSince.get(day(0)).n,
+        api_calls_7d: stmts.apiCallsSince.get(day(7)).n,
+        alerts: stmts.alertCount.get().n,
+        products: stmts.productCount.get().n,
+        price_points: stmts.pricePointCount.get().n,
+      };
     },
 
     close() {

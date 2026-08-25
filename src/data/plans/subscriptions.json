@@ -1,0 +1,20 @@
+{
+  "vertical": "subscription",
+  "snapshot": "2026-08",
+  "notes": "A catalog of well-known consumer subscriptions with their commonly-listed US headline monthly price at the snapshot date. These are advertised prices as widely reported, not live-scraped, and change often — treat them as a starting point and verify current pricing before relying on it. PriceTruth's value here is revealing the true first-year cost (renewal hikes, annual-billing framing) from the advertised teaser, which the engine computes and labels by certainty.",
+  "disclaimer": "Prices are point-in-time and approximate. No affiliation with or endorsement by the listed services is implied.",
+  "plans": [
+    { "slug": "netflix-standard", "name": "Netflix Standard", "advertised_cents": 1799, "pattern": "streaming", "aliases": ["netflix"] },
+    { "slug": "disney-plus", "name": "Disney+ (ad-free)", "advertised_cents": 1599, "pattern": "streaming", "aliases": ["disney", "disney plus", "disney+"] },
+    { "slug": "spotify-premium", "name": "Spotify Premium (Individual)", "advertised_cents": 1199, "pattern": "streaming", "aliases": ["spotify"] },
+    { "slug": "max-ad-free", "name": "Max (ad-free)", "advertised_cents": 1699, "pattern": "streaming", "aliases": ["hbo", "hbo max", "max"] },
+    { "slug": "youtube-premium", "name": "YouTube Premium", "advertised_cents": 1399, "pattern": "streaming", "aliases": ["youtube"] },
+    { "slug": "nyt-all-access", "name": "The New York Times (All Access, intro offer)", "advertised_cents": 400, "pattern": "news", "introMonths": 12, "renewal_cents": 2500, "aliases": ["nyt", "new york times", "nytimes"] },
+    { "slug": "wsj-digital", "name": "The Wall Street Journal (Digital, intro offer)", "advertised_cents": 400, "pattern": "news", "introMonths": 12, "renewal_cents": 3899, "aliases": ["wsj", "wall street journal"] },
+    { "slug": "nordvpn-2yr", "name": "NordVPN (2-year plan, per month)", "advertised_cents": 399, "pattern": "vpn", "introMonths": 24, "renewal_cents": 1399, "aliases": ["nordvpn", "nord vpn"] },
+    { "slug": "expressvpn", "name": "ExpressVPN (per month on annual)", "advertised_cents": 833, "pattern": "vpn", "aliases": ["expressvpn", "express vpn"] },
+    { "slug": "planet-fitness-black", "name": "Planet Fitness (Black Card)", "advertised_cents": 2499, "pattern": "fitness", "aliases": ["planet fitness", "gym"] },
+    { "slug": "peloton-app", "name": "Peloton App", "advertised_cents": 1299, "pattern": "fitness", "aliases": ["peloton"] },
+    { "slug": "adobe-photography", "name": "Adobe Creative Cloud (Photography)", "advertised_cents": 999, "pattern": "default", "aliases": ["adobe", "creative cloud", "photoshop"] }
+  ]
+}
