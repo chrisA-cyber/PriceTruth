@@ -2,8 +2,10 @@
 
 **Scope:** this document was produced by auditing the actual spine code (`src/server.js`,
 `src/security.js`, `src/db.js`, `src/keygen.js`, `src/seed.js`, `src/engine/*`,
-`src/data/partners.json`) at version 0.1.0. Every claim below cites the implementation.
-Line references are approximate and may drift as files change; function names are stable anchors.
+`src/data/partners.json`) plus the monetization and live-data layers added afterward
+(`src/billing.js`, `src/providers/*`) at version 0.1.0. Every claim below cites the
+implementation. Line references are approximate and may drift as files change; function names are
+stable anchors.
 
 **Status:** working prototype with demo data. Honest about what it does and does not defend
 against — see [Open findings](#open-findings) and [Honest gaps](#4-honest-gaps--production-todos).
@@ -109,20 +111,33 @@ sprawl — is zero. The trusted computing base is the Node.js runtime itself plu
 first-party code. The corollary obligation is a Node patching policy (see §4), because runtime
 CVEs are the *only* upstream CVEs that can affect us.
 
-**Privacy: data minimization as the primary control.** The system stores almost nothing about
-people. The full inventory of user-adjacent data (see `src/db.js` SCHEMA):
+**Privacy: data minimization as the primary control.** The system stores little about people, and
+what it stores is purpose-bound. The full inventory of user-adjacent data (see `src/db.js`
+SCHEMA):
 
-- `alerts.email` — the only PII in the system, supplied voluntarily for price alerts.
-- `api_keys` — SHA-256 hashes of B2B keys plus an operator-chosen label; never the raw key.
-- No accounts, no passwords, no sessions, no cookies (the server never sets a `Set-Cookie`
-  header anywhere), no tracking identifiers, no client fingerprinting, no third-party
-  requests of any kind (the CSP even forbids the *frontend* from making them).
+- `alerts.email` — email addresses supplied voluntarily for price alerts.
+- `accounts` — one row per purchasing email: the email, its entitlement `plan`
+  (`free`/`premium`/`api`), and an optional Stripe customer id, written by a completed checkout
+  (`src/db.js upsertAccount`, called from `src/billing.js applyEvent`). These are *entitlement*
+  rows, not authenticated accounts: there are still no passwords, no sessions, and no cookies
+  (the server never sets a `Set-Cookie` header anywhere).
+- `billing_events` — a revenue-ledger row per applied Stripe event (type, plan, amount, currency,
+  livemode, unique Stripe ref, and the purchaser email when Stripe supplies it).
+- `pending_keys` — a transient, plaintext API key awaiting one-time claim after a paid API
+  checkout; TTL-swept (§3.12).
+- `api_keys` — SHA-256 hashes of B2B keys plus label, tier, and (for checkout-minted keys) the
+  owner email and Stripe ref; never the raw key.
+- No tracking identifiers and no client fingerprinting; the *browser* makes no third-party
+  requests (the CSP forbids the frontend from reaching any other origin). The **server**,
+  however, now does make outbound calls when the relevant env vars are configured — to Amadeus,
+  Ticketmaster, an optional retail feed, and Stripe — so the earlier "no outbound/third-party
+  network calls of any kind" claim no longer holds; see §3.15.
 - Logs contain method, path, status, and latency only — no IPs, emails, keys, or query
   strings (`src/server.js handle`, final `console.log`; the `/go/` target URL lives in the
   query string, which is deliberately not logged).
 
-What isn't collected can't be breached. The remaining PII (alert emails) is the top-listed
-production hardening item in §4.
+What isn't collected can't be breached. The PII at rest (alert and account/purchaser emails, plus
+any not-yet-claimed raw API key) is the top-listed production hardening item in §4.
 
 ## 2. Threat model (STRIDE-lite)
 
@@ -130,12 +145,15 @@ Assets worth protecting: **(a)** alert email addresses, **(b)** B2B API keys and
 accounting, **(c)** price data integrity (history, stats, scores — the product *is* this data),
 **(d)** the admin key-minting capability, **(e)** availability of the service, **(f)** visitors'
 browsers (XSS / redirect abuse), **(g)** PriceTruth's honesty reputation (estimates labeled as
-estimates).
+estimates), **(h)** billing/revenue-ledger integrity and the paid entitlements it grants
+(premium status, minted API keys) plus the upstream provider credentials.
 
 | STRIDE | Threat (concrete) | Asset | Shipped control |
 |---|---|---|---|
 | **Spoofing** | Forged B2B identity to steal quota or read the API | B2B keys, quota | 192-bit random keys (`crypto.randomBytes(24)`), presented key hashed then looked up, unrevoked-only (`src/db.js createApiKey`/`findApiKey`); length gate 20–128 chars before hashing |
-| **Spoofing** | Forged admin identity to mint keys | Admin capability | Route hard-disabled unless `ADMIN_TOKEN` env is set; header must equal it (`src/server.js` `/api/admin/keys`); see F-3 for the comparison caveat |
+| **Spoofing** | Forged admin identity to mint keys | Admin capability | Route hard-disabled unless `ADMIN_TOKEN` env is set; header must equal it, now via `crypto.timingSafeEqual` (`src/server.js isAdmin` / `/api/admin/keys`; F-3 resolved, §3.14) |
+| **Spoofing** | Forged Stripe webhook to grant premium or mint an API key | Entitlement, keys | Body read raw pre-parse; HMAC-SHA256 over `t.body` compared timing-safe against the `v1` signature, keyed by `STRIPE_WEBHOOK_SECRET`, with a 300 s freshness window; bad/absent/stale signature → 400 (`src/billing.js verifyWebhook`, §3.10) |
+| **Tampering / Repudiation** | Replayed webhook double-counts revenue | Revenue ledger | `billing_events.stripe_ref` UNIQUE + `INSERT OR IGNORE` records each event's revenue exactly once (`src/db.js recordBillingEvent`, §3.11); key issuance is claim-once-per-session but not strictly insert-once on an in-window retry (§4) |
 | **Spoofing** | Alert signup with someone else's email | Alert emails | Weak today: format validation only, no ownership verification (demo sends no email, so impact is a DB row); double opt-in is a production requirement (§4) |
 | **Tampering** | SQL injection via any input | All DB data | Every query is a prepared statement with bound parameters — there is no string-built SQL anywhere in `src/db.js` |
 | **Tampering** | Poisoned price history skewing scores | Price integrity | Input validation (integer cents 0..1e9, product must exist, `true_cents` recomputed server-side by the engine, never client-supplied) + write rate limit — but submission is unauthenticated: **open finding F-2** |
@@ -150,7 +168,7 @@ estimates).
 | **DoS** | Oversized / malformed bodies | Availability | 32 KB JSON body cap with early `req.destroy()` (`src/security.js readJsonBody`); `context` additionally capped at 4 KB serialized (`src/server.js runAnalyze`); Node's built-in 16 KB header cap applies |
 | **DoS** | Quota theft on B2B tier | Quota accounting | Daily metering in SQLite per key per day (`src/db.js meterUsage`), 429 over `starter` 100/day, `pro` 10k/day |
 | **Elevation** | Public user mints API keys | Admin capability | 403 unless `ADMIN_TOKEN` set and matched; local minting is the documented path (`npm run keygen`) |
-| **Elevation** | Free user exceeds alert limit | Paywall | Server-side count per email vs. limit — but the `premium` flag is client-asserted, an explicitly commented demo stand-in for a real account check (`src/server.js` `/api/alerts`) |
+| **Elevation** | Free user exceeds alert limit | Paywall | Server-side count per email vs. limit; entitlement is `db.isPremium(email)` reading the `accounts` table (set only by a completed checkout), **not** a client-supplied flag — the old client `premium` bypass was removed and a regression test asserts `premium: true` in the body cannot lift the limit (`src/server.js` `/api/alerts`, §3.13) |
 | **Repudiation-ish / honesty** | Estimates passed off as facts | Reputation | Every line item carries `certainty: listed\|typical\|estimated`; `confidence` degrades per non-listed item; `assumptions`/`disclosures` ride the report (`src/engine/analyze.js`) |
 
 ## 3. Implemented controls, mapped to code
@@ -250,8 +268,9 @@ money.
   looks up the digest, with a 20–128 char length gate first.
 - **Admin minting off by default.** `POST /api/admin/keys` returns 403 with a pointer to
   `npm run keygen` unless the `ADMIN_TOKEN` env var is set *and* the `X-Admin-Token` header
-  matches (`src/server.js handleApi`; comparison caveat in F-3). No token in the environment
-  means the capability does not exist at runtime.
+  matches — now a constant-time `crypto.timingSafeEqual` after a length pre-check
+  (`src/server.js handleApi`; F-3 resolved, see §3.14). No token in the environment means the
+  capability does not exist at runtime.
 - **Affiliate open-redirect guard.** `GET /go/:partner` (`src/server.js handleAffiliate`)
   requires a known partner id (`src/data/partners.json`), an absolute parseable `target`,
   `protocol === 'https:'`, and `hostAllowed`: hostname lowercased, then exact match or
@@ -288,35 +307,195 @@ API response — public (`/api/products`, `/api/products/:id`) and B2B (`/api/v1
 `/api/v1/track`) — carries `demoData: true`. The `/api/analyze` and `/api/v1/analyze` routes
 compute on caller-supplied inputs (not seeded data) and so carry no demo flag.
 
+### 3.10 Stripe webhook signature verification
+
+`POST /api/billing/webhook` is the one unauthenticated *state-changing* route, and its gate is a
+signature, not a rate limiter. The handler (`src/server.js handleApi`, ≈395) reads the request
+body with `readRawBody` (`src/security.js`, 1 MB cap) **before any JSON parsing** — signature
+verification must run over the exact bytes received, so the raw text is captured first and only
+the verified bytes are parsed. `billing.verifyWebhook` (`src/billing.js`) parses the
+`Stripe-Signature` header (`t=<timestamp>,v1=<hmac>`), recomputes `HMAC-SHA256` over
+`` `${t}.${rawBody}` `` keyed by `STRIPE_WEBHOOK_SECRET`, and compares it to the presented `v1`
+with `crypto.timingSafeEqual` — length-checked first, so a wrong-length signature short-circuits
+to a reject instead of throwing inside `timingSafeEqual`. It then rejects any timestamp whose
+absolute skew from now exceeds a **300 s tolerance** (the replay window), and only then
+`JSON.parse`s the verified body. A missing, malformed, forged, or stale signature throws a plain
+`Error` carrying `err.status = 400`; the central error handler (`src/server.js handle` catch,
+≈272) now honors a well-formed 4xx status carried on a plain `Error`, so these surface as a real
+400 with the intended message rather than a generic 500. (A missing `STRIPE_WEBHOOK_SECRET` is a
+500, and a Stripe API failure in outbound calls carries a 502 that — being non-4xx — falls
+through to the generic 500 body.)
+
+The route is **intentionally exempt from rate limiting** (`isWebhook` check, `src/server.js
+handle`, ≈247): Stripe retries deliveries with backoff, and a 429 here would drop legitimate
+billing events. This is a deliberate, bounded exemption — a single path whose only entry is
+signature-gated — not a general hole. Honest note: `verifyWebhook` is a zero-dependency,
+first-party reimplementation of Stripe's documented signing scheme, exercised end-to-end by a
+`signPayload` → `verifyWebhook` round-trip test; it has not been cross-validated against Stripe's
+official SDK, so treat it as a careful implementation of that check rather than a certified one.
+
+### 3.11 Billing ledger idempotency / replay safety
+
+`billing_events.stripe_ref` is declared `UNIQUE`, and `db.recordBillingEvent` inserts with
+`INSERT OR IGNORE` (`src/db.js`). Stripe delivers webhooks *at least once* and retries on backoff,
+so the same `checkout.session.completed` event can legitimately arrive more than once; the
+unique-ref-plus-ignore means each distinct event's revenue lands in the ledger **exactly once**.
+This protects the revenue totals (`db.revenueSummary`) from double-counting and blunts
+replay-driven state changes — a captured webhook replayed by an attacker would still have to pass
+the signature and 300 s freshness checks of §3.10, and even then contributes no new ledger row.
+Covered by tests (`test/db.test.js` "ignores a duplicate stripe_ref"; `test/api.test.js` asserts a
+replayed premium webhook does not double the gross).
+
+Honest scope of the guarantee: the ledger row is the idempotency anchor for **revenue only**.
+`billing.applyEvent` performs entitlement/key issuance regardless of whether the ledger insert was
+a fresh row or ignored. For a consumer plan that is naturally idempotent (`upsertAccount` sets the
+same email → `premium`), but for an API plan a genuine in-window Stripe retry would run
+`db.createApiKey` again and mint an *additional* `api_keys` row. The once-shown `pending_keys`
+slot is keyed by `session_id` with `INSERT OR REPLACE`, so only one raw key is ever claimable per
+session (the most recently minted); the earlier hash becomes an orphan whose raw form is
+unrecoverable and thus unusable, but it still counts in key metrics. So: revenue is insert-once;
+key issuance is claim-once-per-session but not strictly insert-once. Tightening this is a §4 item.
+
+### 3.12 Claim-once API-key issuance
+
+A paid API-plan checkout (`api_starter` / `api_pro`) mints a key inside `billing.applyEvent`
+(`src/billing.js`): `db.createApiKey` generates `pt_<tier>_<base64url(24 random bytes)>` (192 bits
+of CSPRNG entropy), stores **only** its SHA-256 hash in `api_keys`, and returns the raw key. The
+raw key is written to the `pending_keys` table keyed by the Stripe `session_id`
+(`db.putPendingKey`) and handed back **exactly once** by `GET /api/billing/claim`, which validates
+`session_id` against `^[A-Za-z0-9_]{6,200}$` and calls `db.takePendingKey` — a read-then-delete in
+the same call (claim-once semantics). Unclaimed rows are swept on a TTL by `db.prunePendingKeys`
+(default 24 h) from the 5-minute periodic sweep in `createApp` (`src/server.js`, ≈219–224). The
+raw key is never logged and is never persisted anywhere except this one transient row.
+
+Honest tradeoff: between checkout and claim (at most the 24 h TTL), the plaintext API key sits at
+rest in `pending_keys` inside the SQLite file. This is the **only** place a raw key ever lives,
+and it is deleted the instant it is claimed — an accepted tradeoff for a once-shown handoff a
+buyer needs immediately after paying. But a DB file stolen during that window would expose any
+not-yet-claimed keys in the clear. Encrypting the column or shortening the TTL is the production
+hardening (§4).
+
+### 3.13 Server-side entitlement (no client-trusted flags)
+
+The premium alert paywall (`POST /api/alerts`, `src/server.js`) decides entitlement with
+`db.isPremium(email)`, which reads the `accounts` table and returns true only when that email's
+`plan` is exactly `premium` (`src/db.js`). Premium is set solely by a completed checkout —
+`applyEvent` → `db.upsertAccount({ plan: 'premium' })` in live mode, or the labeled mock-checkout
+flow locally — never by anything in the request body. An earlier demo build trusted a `premium`
+boolean supplied by the client; that override was **removed**. A regression test asserts a request
+carrying `premium: true` still gets the free limit (`test/api.test.js`, "a client-supplied premium
+flag does NOT lift the limit"), and a companion test confirms a real mock checkout does lift it for
+that email. Limits are server-side constants: `FREE_ALERT_LIMIT` (1) and `PREMIUM_ALERT_LIMIT`
+(20); over-limit requests return a 402 with an upgrade pointer.
+
+### 3.14 Admin authentication
+
+Admin access hangs on the `ADMIN_TOKEN` env var, compared with `crypto.timingSafeEqual` after a
+length pre-check (`isAdmin`, `src/server.js`, ≈116; the same inline check guards
+`POST /api/admin/keys`). When `ADMIN_TOKEN` is unset the comparison can never pass, so
+`GET /api/admin/metrics` returns 403 and key minting is disabled with a pointer to
+`npm run keygen` — the capability does not exist at runtime without the env var. This is the
+constant-time comparison F-3 called for, now applied to every admin *data* entry point. Precise
+scope, so this is not overstated: the **data** endpoints (`/api/admin/metrics` and the mint route)
+are token-gated; the **`/admin` HTML shell** (`admin.html`) is still served as an ordinary static
+file with no server-side token check (`src/server.js serveStatic`, ≈566), because it carries no
+data — it only holds the token in the tab's `sessionStorage` and forwards it as `X-Admin-Token`
+when it fetches the gated metrics endpoint. No secrets are exposed by the metrics payload:
+`providerStatus()` (`src/providers/index.js`) reports booleans only
+(`{ <vertical>: { live: true|false } }`), never keys or credentials.
+
+### 3.15 Provider layer — SSRF surface and secret handling
+
+Live search (`POST /api/search`) reaches out to third-party price sources through the provider
+registry (`src/providers/index.js`). **Every upstream host is fixed and developer-configured, not
+derived from user input:**
+
+- **Amadeus** (hotels + flights): the host is `AMADEUS_HOST` or the hardcoded
+  `https://test.api.amadeus.com` default (`src/providers/amadeus.js`). The user's free-text query
+  is resolved to an allowlisted city code or a `^[A-Z]{3}$`-validated code / airport-code pair
+  before it ever reaches a URL (`resolveCity` / `parseRoute`) — raw query text is never
+  interpolated into an Amadeus request.
+- **Ticketmaster**: the base is the hardcoded constant
+  `https://app.ticketmaster.com/discovery/v2/events.json` (`src/providers/tickets.js`); the query
+  is sent only as `&keyword=${encodeURIComponent(q)}`.
+- **Retail**: the base is the **operator-set** `RETAIL_API_URL` env var (an operator config value,
+  not a user-supplied URL), with the query appended as `q=${encodeURIComponent(q)}`
+  (`src/providers/retail.js`).
+
+So there is no user-controlled SSRF vector: a caller can influence a query-string parameter but
+never the scheme, host, or path. All outbound requests go through `httpJson`
+(`src/providers/http.js`), which wraps `fetch` in an `AbortController` timeout (6 s default; the
+authenticated Amadeus calls use 8 s) and raises a 504 on timeout. Upstream errors are reported with
+the host name only (`safeHost`), never the full URL — so the Ticketmaster `apikey` query parameter
+and any bearer token stay out of error messages. All API credentials
+(`AMADEUS_CLIENT_ID`/`AMADEUS_CLIENT_SECRET`, `TICKETMASTER_API_KEY`, `RETAIL_API_KEY`,
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_TOKEN`) come only from env vars, are never
+returned in any response, and are never logged; `.env*` files are gitignored (§3.9). Live provider
+responses are trusted to be *well-formed* JSON: they are validated for a usable integer price
+(`normalize` requires an integer `advertised_cents` ≥ 0; retail requires integer `price_cents`)
+and any listing URL is accepted only when it begins with `https://`, but the payloads are not
+otherwise deeply schema-checked (§4). A configured live source that fails degrades to a clearly
+labeled estimate rather than throwing, and an estimate is never presented as live
+(`searchListing`, `source`/`certainty` labels).
+
 ## 4. Honest gaps & production TODOs
 
 Ordered roughly by how soon each bites.
 
-1. **No TLS.** The prototype speaks plaintext HTTP and (per F-1) currently binds all
-   interfaces. Before any deployment: bind explicitly, terminate TLS (or front with a
+1. **No TLS.** The prototype speaks plaintext HTTP. It now binds loopback by default and
+   `0.0.0.0` only on a recognized hosted platform or with an explicit `HOST` (F-1 resolved), but
+   it terminates no TLS of its own. Before any deployment: terminate TLS (or front with a
    TLS-terminating proxy), add `Strict-Transport-Security` with a sane `max-age` once HTTPS is
-   stable, and redirect HTTP→HTTPS at the edge. B2B keys and the admin token travel in headers
-   and are trivially sniffable without TLS.
-2. **No user accounts or authentication.** Alerts are keyed by bare email; anyone naming an
-   email consumes its free-alert slot, and the `premium` flag is client-asserted (an explicitly
-   commented demo stand-in, `src/server.js` `/api/alerts`). Production needs real accounts, a
-   real entitlement check, and per-account rather than per-email limits.
-3. **Alert emails in plaintext** (`alerts.email`, `src/db.js`). Acceptable in a local demo
-   that never sends mail (the 201 response says exactly that). Production requirements:
-   encryption at rest (full-disk at minimum; column-level preferred), **double opt-in** before
-   an address is considered subscribed (also closes the sign-someone-else-up hole), one-click
-   unsubscribe honored in every mail, and a retention/erasure story (delete on unsubscribe).
-4. **Hashing vs. constant-time comparison.** Plain SHA-256 of API keys is appropriate — the
+   stable, and redirect HTTP→HTTPS at the edge. B2B keys, the admin token, and the Stripe webhook
+   secret's signatures travel in headers and are trivially sniffable without TLS.
+2. **Entitlement exists, but there is still no user authentication.** Entitlement is now a
+   real server-side check — `db.isPremium(email)` against the `accounts` table, set only by a
+   completed checkout (§3.13), so the old client-asserted `premium` flag is gone. What remains
+   missing is *authentication*: `accounts`/`alerts` are keyed by bare email with no proof of
+   ownership, so anyone naming an email consumes its slots, and limits are per-email rather than
+   per-account. Production needs real login, proof of email ownership, and per-account limits.
+3. **Stripe customer ↔ email mapping is trust-on-first-use.** `applyEvent` takes the email and
+   `customer` id straight from the checkout session and upserts them onto the account
+   (`src/billing.js`, `src/db.js upsertAccount`); there is no independent verification that the
+   paying party controls that email, and the billing-portal route resolves a customer purely by
+   whatever email is presented (`/api/billing/portal`). Fine while the flow is Stripe-originated
+   and no mail is sent, but it should be tied to an authenticated account (gap 2) before it gates
+   anything of value.
+4. **PII and secrets in plaintext at rest.** Alert, account, and purchaser emails
+   (`alerts.email`, `accounts.email`, `billing_events.email`) and, transiently, a raw API key in
+   `pending_keys` all sit unencrypted in the local WAL SQLite file. Acceptable in a local demo
+   that never sends mail (the 201 alert response says exactly that) and hands a key back exactly
+   once (§3.12). Production requirements: encryption at rest (full-disk at minimum; column-level
+   preferred), **encrypt the `pending_keys.raw_key` column or shorten its TTL** so a stolen DB
+   file can't leak unclaimed keys, **double opt-in** before an address is considered subscribed
+   (also closes the sign-someone-else-up hole), one-click unsubscribe honored in every mail, and
+   a retention/erasure story (delete on unsubscribe).
+5. **Webhook key issuance is not strictly insert-once.** The revenue ledger dedupes replays by
+   unique `stripe_ref` (§3.11), but `applyEvent` re-mints an API key on any in-window Stripe
+   retry of an API-plan event; only one raw key stays claimable per session, but orphan
+   `api_keys` hashes accumulate. Guard key issuance on the ledger insert being fresh (or on a
+   per-session mint marker) before billing real customers.
+6. **Live provider responses are trusted to be well-formed.** Upstream JSON is validated for a
+   usable integer price and an `https://` URL (§3.15) but is not otherwise schema-checked, and
+   there is no user-driven SSRF vector (hosts are fixed/operator-configured). Production should
+   add stricter response validation and per-provider timeouts/circuit-breaking beyond today's
+   single AbortController timeout and degrade-to-estimate fallback.
+7. **No per-account billing audit trail beyond the ledger.** `billing_events` is an
+   append-only revenue ledger, not an audit log of entitlement changes; there is no record of
+   *who* was granted or revoked what, when, or by which event. Add a per-account entitlement
+   history before support or dispute-handling depends on it.
+8. **Hashing vs. constant-time comparison.** Plain SHA-256 of API keys is appropriate — the
    keys carry 192 bits of CSPRNG entropy, so offline brute-force of a stolen hash is hopeless
    and slow password hashes (bcrypt/argon2) would only add latency. The hash-then-lookup also
-   makes the equality check effectively timing-safe for keys. The one direct secret comparison
-   that should become `crypto.timingSafeEqual` is the admin token (F-3).
-5. **Rate limiting is per-process memory.** Restart clears every bucket; multiple instances
+   makes the equality check effectively timing-safe for keys. The admin-token comparison is now
+   `crypto.timingSafeEqual` (F-3 resolved, §3.14), and the Stripe webhook signature compare is
+   likewise timing-safe (§3.10), so no plaintext-secret `!==` comparison remains.
+9. **Rate limiting is per-process memory.** Restart clears every bucket; multiple instances
    would each grant a full allowance; there is no cross-node view. Production: shared store
    (Redis or equivalent) or edge limiting, keyed with IPv6 /64 awareness (F-6), plus derive
    client IP from the trusted proxy's `X-Forwarded-For` **only when** actually behind that
    proxy — today's code correctly ignores that spoofable header because it binds no proxy.
-6. **No CSRF tokens — and why that is currently sound.** CSRF exploits ambient credentials the
+10. **No CSRF tokens — and why that is currently sound.** CSRF exploits ambient credentials the
    browser attaches automatically (cookies, HTTP auth). PriceTruth sets no cookies and has no
    session mechanism; the only credentials are explicit headers (`X-API-Key`,
    `X-Admin-Token`) that a cross-site form or fetch cannot forge onto a request. A cross-site
@@ -326,21 +505,26 @@ Ordered roughly by how soon each bites.
    being moot the day cookie-based sessions land** (gap 2): at that point add SameSite=Lax/
    Strict cookies, origin/Referer checks, and CSRF tokens on state-changing routes, in that
    order.
-7. **No API-key revocation path.** The schema supports it (`api_keys.revoked`, filtered by
+11. **No API-key revocation path.** The schema supports it (`api_keys.revoked`, filtered by
    `findApiKey`), but no route or CLI sets it — revoking today means manual SQL. Ship a
    `keygen --revoke` or admin route before issuing keys to real customers.
-8. **Node runtime patching policy.** With zero dependencies, the runtime *is* the supply
+12. **Node runtime patching policy.** With zero dependencies, the runtime *is* the supply
    chain. Policy: track the active Node LTS line, apply Node security releases within 7 days of
    advisory publication (same-day for network-facing CVEs in `http`/`tls`/`zlib`), and pin the
    deployed minor version so upgrades are deliberate. `package.json` already enforces
    `"node": ">=24"`.
-9. **No container/deploy hardening yet.** There is no Dockerfile or deploy config to audit.
+13. **No container/deploy hardening yet.** There is no Dockerfile or deploy config to audit.
    When one exists: non-root user, read-only filesystem except the data directory, health
    checks on `/api/health`, resource limits, explicit socket timeouts for slow-loris resilience
    (today only Node's defaults — `headersTimeout`/`requestTimeout` — apply), and a real access
    log with the F-4 control-character stripping baked in.
-10. **Malformed-URL handling** (F-5) and **history-poisoning provenance** (F-2) are code-level
-    fixes queued behind the spine freeze.
+14. **History-poisoning provenance** (F-2) remains open. Anonymous poisoning is already closed
+    (tracking requires `X-API-Key` and a plausibility band; malformed-URL handling F-5 also
+    shipped), and live search now records real observations (§3.15) — but neither attests the
+    *provenance* of an observed price nor does independent server-side fetch verification, so a
+    keyed client or a misbehaving upstream can still nudge history within the plausible band.
+    Production wants signed/attested trackers and price re-verification before a point enters
+    stats.
 
 ## 5. Responsible disclosure
 
@@ -358,4 +542,5 @@ Prototype-stage stub; a real policy page ships with the first public deployment.
 
 ---
 
-*Last audited: 2026-08-21, against the v0.1.0 spine. Re-audit whenever `src/**` changes.*
+*Last audited: 2026-08-21 against the v0.1.0 spine; monetization + live-data layers
+(`src/billing.js`, `src/providers/*`) audited 2026-08-24. Re-audit whenever `src/**` changes.*
