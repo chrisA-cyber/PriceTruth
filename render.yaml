@@ -1,18 +1,69 @@
 # Render blueprint — deploys PriceTruth as a persistent Node web service.
 # In Render: New + → Blueprint → connect the PriceTruth repo → Apply.
-# The app auto-seeds its demo data on boot, so no database provisioning is needed.
+#
+# The app is fully usable with NO secrets set: every vertical falls back to a
+# clearly-labeled estimate and billing runs in simulated "mock" mode. Set the
+# secrets below (marked `sync: false`, so Render prompts for them in the
+# dashboard and they are NEVER stored in this repo) to switch individual data
+# sources and Stripe billing to live. It auto-seeds demo data on boot, so no
+# database needs provisioning.
 services:
   - type: web
     name: pricetruth
     runtime: node
     plan: free
-    buildCommand: npm install
+    # `npm run build` boots the whole app on loopback, checks health, and prints
+    # a live-vs-fallback report — a real preflight before the service starts.
+    buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
-      # Render's routing requires binding all interfaces; the app defaults to
-      # loopback-only for local safety, so we open it up explicitly here.
+      # --- required for correct hosting -------------------------------------
+      # Render routes to the container's public interface; the app defaults to
+      # loopback-only for local safety, so open it up explicitly here.
       - key: HOST
         value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
       # PORT is injected by Render automatically; the server reads process.env.PORT.
+      # Canonical origin for checkout success/cancel URLs, OG tags, and sitemap.
+      # Set to the service's public URL, e.g. https://pricetruth.onrender.com
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+      # --- owner-only admin dashboard (/admin, /api/admin/metrics) ----------
+      # Unset = the admin route is disabled. Set a long random token to enable.
+      - key: ADMIN_TOKEN
+        sync: false
+
+      # --- Stripe billing (unset = simulated "mock" mode) -------------------
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PREMIUM
+        sync: false
+      - key: STRIPE_PRICE_API_STARTER
+        sync: false
+      - key: STRIPE_PRICE_API_PRO
+        sync: false
+
+      # --- live data sources (unset = labeled estimated fallbacks) ----------
+      # Ticketmaster Discovery API (free key): https://developer-acct.ticketmaster.com
+      - key: TICKETMASTER_API_KEY
+        sync: false
+      # Amadeus Self-Service (free test tier): https://developers.amadeus.com
+      # Powers both flights and hotels. Defaults to the test host; set
+      # AMADEUS_HOST=https://api.amadeus.com for production data.
+      - key: AMADEUS_CLIENT_ID
+        sync: false
+      - key: AMADEUS_CLIENT_SECRET
+        sync: false
+      - key: AMADEUS_HOST
+        sync: false
+      # Optional generic retail feed: GET RETAIL_API_URL?q=... -> {price_cents,...}
+      - key: RETAIL_API_URL
+        sync: false
+      - key: RETAIL_API_KEY
+        sync: false

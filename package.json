@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "build": "node src/build.js",
     "seed": "node src/seed.js",
     "keygen": "node src/keygen.js",
     "test": "node --test \"test/*.test.js\""
