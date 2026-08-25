@@ -116,6 +116,35 @@
   white-space: nowrap;
 }
 
+.pt-ext-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8b98a5;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.pt-ext-close:hover {
+  background: rgba(139, 152, 165, 0.16);
+  color: #e6edf3;
+}
+
+.pt-ext-close:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: 1px;
+}
+
 /* --- rows ----------------------------------------------------------------- */
 
 .pt-ext-row {

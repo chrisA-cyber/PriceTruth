@@ -174,6 +174,11 @@
     head.appendChild(titleWrap);
     head.appendChild(el('div', 'pt-ext-load',
       report.feeLoadPct > 0 ? '+' + report.feeLoadPct + '% hidden' : 'no hidden fees'));
+    var close = el('button', 'pt-ext-close', '×');
+    close.type = 'button';
+    close.title = 'Dismiss on this page';
+    close.setAttribute('aria-label', 'Dismiss PriceTruth on this page');
+    head.appendChild(close);
     card.appendChild(head);
 
     card.appendChild(moneyRow('Advertised price', FM.fmtUSD(report.advertised.amount_cents) + FM.unitLabel(report.advertised.unit)));
@@ -210,12 +215,25 @@
     return card;
   }
 
+  // The one live overlay on the page. Re-rendered in place when the detected
+  // price changes (SPA navigation); torn down entirely when the user dismisses.
+  var currentRoot = null;
+  var currentKey = null;      // vertical|profile|cents of what's on screen now
+  var wasOpen = false;        // preserve expanded/collapsed across re-renders
+
+  function removeOverlay() {
+    if (currentRoot && currentRoot.parentNode) currentRoot.parentNode.removeChild(currentRoot);
+    currentRoot = null;
+    currentKey = null;
+  }
+
   function render(report, info) {
     var root = el('div', 'pt-ext-root');
+    if (wasOpen) root.classList.add('pt-ext-open');
 
     var badge = el('button', 'pt-ext-badge');
     badge.type = 'button';
-    badge.setAttribute('aria-expanded', 'false');
+    badge.setAttribute('aria-expanded', wasOpen ? 'true' : 'false');
     badge.appendChild(el('span', 'pt-ext-dot'));
     badge.appendChild(el('span', 'pt-ext-badge-text',
       'PriceTruth: ~' + FM.fmtUSD(report.truePrice.amount_cents) + FM.unitLabel(report.truePrice.unit) + ' real'));
@@ -223,35 +241,120 @@
     var card = buildCard(report, info);
 
     badge.addEventListener('click', function () {
-      var open = root.classList.toggle('pt-ext-open');
-      badge.setAttribute('aria-expanded', open ? 'true' : 'false');
+      wasOpen = root.classList.toggle('pt-ext-open');
+      badge.setAttribute('aria-expanded', wasOpen ? 'true' : 'false');
     });
+
+    var closeBtn = card.querySelector('.pt-ext-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        dismiss();
+      });
+    }
 
     root.appendChild(card);
     root.appendChild(badge);
     (document.body || document.documentElement).appendChild(root);
+    currentRoot = root;
   }
 
   // ---------------------------------------------------------------------------
   // Boot: detect at document_idle; retry briefly for late-rendering pages;
-  // if nothing is confidently found, stay silent.
+  // re-check on SPA navigation and page mutations; stay silent when nothing is
+  // confidently found; honor an explicit dismiss for the current URL.
   // ---------------------------------------------------------------------------
 
   var info = classify(window.location.hostname);
   if (!info) return;
 
+  var dismissedUrl = null;    // user closed the overlay for this exact URL
+  var lastScanAt = 0;         // throttle detection on noisy pages
+  var MIN_SCAN_GAP_MS = 900;
+  var scanTimer = null;
+
+  function keyFor(report) {
+    return info.vertical + '|' + info.profile + '|' + report.truePrice.amount_cents;
+  }
+
+  function dismiss() {
+    dismissedUrl = window.location.href;
+    wasOpen = false;
+    removeOverlay();
+  }
+
+  // Detect the prominent price and reconcile the overlay with it. Cheap to call
+  // repeatedly: bails fast when nothing changed or the user dismissed this URL.
+  function reconcile() {
+    if (dismissedUrl === window.location.href) return;
+    var found = detectPrice();
+    if (!found) return;
+    var report = FM.analyze(info.vertical, found.cents, { profile: info.profile });
+    if (!report) return;
+    var key = keyFor(report);
+    if (key === currentKey && currentRoot) return; // already showing this
+    removeOverlay();
+    render(report, info);
+    currentKey = key;
+  }
+
+  // Throttled reconcile — coalesces bursts of DOM mutations into one scan.
+  function scheduleScan(delayMs) {
+    if (scanTimer) return;
+    var wait = Math.max(delayMs || 0, MIN_SCAN_GAP_MS - (Date.now() - lastScanAt));
+    if (wait < 0) wait = 0;
+    scanTimer = window.setTimeout(function () {
+      scanTimer = null;
+      lastScanAt = Date.now();
+      reconcile();
+    }, wait);
+  }
+
+  // First look plus a couple of retries for late-rendering SPAs.
   var attempt = 0;
   function tryDetect() {
-    var found = detectPrice();
-    if (found) {
-      var report = FM.analyze(info.vertical, found.cents, { profile: info.profile });
-      if (report) render(report, info);
-      return;
-    }
-    if (attempt < RETRY_DELAYS_MS.length) {
+    reconcile();
+    if (!currentRoot && attempt < RETRY_DELAYS_MS.length) {
       window.setTimeout(tryDetect, RETRY_DELAYS_MS[attempt]);
       attempt++;
     }
   }
   tryDetect();
+
+  // SPA route changes: history API is patched by most client-side routers, so
+  // wrap it to learn when the "page" changes without a full reload. A changed
+  // URL clears any prior dismiss and forces a fresh scan.
+  function onNavigation() {
+    if (dismissedUrl && dismissedUrl !== window.location.href) dismissedUrl = null;
+    currentKey = null; // force re-render even if the number happens to match
+    scheduleScan(400);
+  }
+  ['pushState', 'replaceState'].forEach(function (m) {
+    var orig = history[m];
+    if (typeof orig !== 'function') return;
+    history[m] = function () {
+      var r = orig.apply(this, arguments);
+      onNavigation();
+      return r;
+    };
+  });
+  window.addEventListener('popstate', onNavigation);
+  window.addEventListener('hashchange', onNavigation);
+
+  // Content swaps without a route change (filters, date pickers) — watch the
+  // body, but throttle hard so we never thrash on chatty pages.
+  if (window.MutationObserver && document.body) {
+    var mo = new MutationObserver(function () { scheduleScan(0); });
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+  }
+
+  // Esc collapses an open card (does not permanently dismiss).
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && currentRoot && currentRoot.classList.contains('pt-ext-open')) {
+      wasOpen = false;
+      currentRoot.classList.remove('pt-ext-open');
+      var b = currentRoot.querySelector('.pt-ext-badge');
+      if (b) b.setAttribute('aria-expanded', 'false');
+    }
+  });
 })();
