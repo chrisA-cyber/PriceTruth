@@ -153,7 +153,7 @@ estimates), **(h)** billing/revenue-ledger integrity and the paid entitlements i
 | **Spoofing** | Forged B2B identity to steal quota or read the API | B2B keys, quota | 192-bit random keys (`crypto.randomBytes(24)`), presented key hashed then looked up, unrevoked-only (`src/db.js createApiKey`/`findApiKey`); length gate 20–128 chars before hashing |
 | **Spoofing** | Forged admin identity to mint keys | Admin capability | Route hard-disabled unless `ADMIN_TOKEN` env is set; header must equal it, now via `crypto.timingSafeEqual` (`src/server.js isAdmin` / `/api/admin/keys`; F-3 resolved, §3.14) |
 | **Spoofing** | Forged Stripe webhook to grant premium or mint an API key | Entitlement, keys | Body read raw pre-parse; HMAC-SHA256 over `t.body` compared timing-safe against the `v1` signature, keyed by `STRIPE_WEBHOOK_SECRET`, with a 300 s freshness window; bad/absent/stale signature → 400 (`src/billing.js verifyWebhook`, §3.10) |
-| **Tampering / Repudiation** | Replayed webhook double-counts revenue | Revenue ledger | `billing_events.stripe_ref` UNIQUE + `INSERT OR IGNORE` records each event's revenue exactly once (`src/db.js recordBillingEvent`, §3.11); key issuance is claim-once-per-session but not strictly insert-once on an in-window retry (§4) |
+| **Tampering / Repudiation** | Replayed webhook double-counts revenue or re-mints keys | Revenue ledger | `billing_events.stripe_ref` UNIQUE + `INSERT OR IGNORE`; `recordBillingEvent` returns first-time/duplicate and `applyEvent` gates all side effects on it, so revenue **and** key issuance are insert-once (`src/db.js`, `src/billing.js`, §3.11). Residual: side effects not yet wrapped in one transaction (§4) |
 | **Spoofing** | Alert signup with someone else's email | Alert emails | Weak today: format validation only, no ownership verification (demo sends no email, so impact is a DB row); double opt-in is a production requirement (§4) |
 | **Tampering** | SQL injection via any input | All DB data | Every query is a prepared statement with bound parameters — there is no string-built SQL anywhere in `src/db.js` |
 | **Tampering** | Poisoned price history skewing scores | Price integrity | Input validation (integer cents 0..1e9, product must exist, `true_cents` recomputed server-side by the engine, never client-supplied) + write rate limit — but submission is unauthenticated: **open finding F-2** |
@@ -337,24 +337,26 @@ official SDK, so treat it as a careful implementation of that check rather than 
 ### 3.11 Billing ledger idempotency / replay safety
 
 `billing_events.stripe_ref` is declared `UNIQUE`, and `db.recordBillingEvent` inserts with
-`INSERT OR IGNORE` (`src/db.js`). Stripe delivers webhooks *at least once* and retries on backoff,
-so the same `checkout.session.completed` event can legitimately arrive more than once; the
-unique-ref-plus-ignore means each distinct event's revenue lands in the ledger **exactly once**.
-This protects the revenue totals (`db.revenueSummary`) from double-counting and blunts
-replay-driven state changes — a captured webhook replayed by an attacker would still have to pass
-the signature and 300 s freshness checks of §3.10, and even then contributes no new ledger row.
-Covered by tests (`test/db.test.js` "ignores a duplicate stripe_ref"; `test/api.test.js` asserts a
-replayed premium webhook does not double the gross).
+`INSERT OR IGNORE` and **returns whether a new row was actually written** (`src/db.js`). Stripe
+delivers webhooks *at least once* and retries on backoff, so the same `checkout.session.completed`
+event can legitimately arrive more than once; the unique-ref-plus-ignore means each distinct
+event's revenue lands in the ledger **exactly once**. A captured webhook replayed by an attacker
+would still have to pass the signature and 300 s freshness checks of §3.10, and even then
+contributes no new ledger row.
 
-Honest scope of the guarantee: the ledger row is the idempotency anchor for **revenue only**.
-`billing.applyEvent` performs entitlement/key issuance regardless of whether the ledger insert was
-a fresh row or ignored. For a consumer plan that is naturally idempotent (`upsertAccount` sets the
-same email → `premium`), but for an API plan a genuine in-window Stripe retry would run
-`db.createApiKey` again and mint an *additional* `api_keys` row. The once-shown `pending_keys`
-slot is keyed by `session_id` with `INSERT OR REPLACE`, so only one raw key is ever claimable per
-session (the most recently minted); the earlier hash becomes an orphan whose raw form is
-unrecoverable and thus unusable, but it still counts in key metrics. So: revenue is insert-once;
-key issuance is claim-once-per-session but not strictly insert-once. Tightening this is a §4 item.
+`billing.applyEvent` uses that return value as its **idempotency gate for the whole handler**: on
+a replay (`recordBillingEvent` returns `false`) it returns early with `{ duplicate: true }` and
+performs no entitlement grant and no key minting. So both revenue *and* key issuance are now
+insert-once — a redelivered API-plan event does not mint a second `api_keys` row. (This closes the
+gap noted in earlier drafts.) Covered by tests: `test/db.test.js` asserts the first-time/duplicate
+return; `test/billing.test.js` asserts a replayed API checkout mints no second key and a replayed
+premium webhook does not double the gross; `test/api.test.js` exercises the same over HTTP.
+
+Note the residual failure mode: because the ledger insert and the side effects are separate
+statements (no wrapping transaction), a process crash *between* them on the very first delivery
+would leave the event recorded but the key unminted, and the retry would then be treated as a
+duplicate. In-process `node:sqlite` executes these synchronously back-to-back, so the window is
+tiny; wrapping them in a transaction is the belt-and-suspenders improvement (still a §4 item).
 
 ### 3.12 Claim-once API-key issuance
 
@@ -401,8 +403,10 @@ are token-gated; the **`/admin` HTML shell** (`admin.html`) is still served as a
 file with no server-side token check (`src/server.js serveStatic`, ≈566), because it carries no
 data — it only holds the token in the tab's `sessionStorage` and forwards it as `X-Admin-Token`
 when it fetches the gated metrics endpoint. No secrets are exposed by the metrics payload:
-`providerStatus()` (`src/providers/index.js`) reports booleans only
-(`{ <vertical>: { live: true|false } }`), never keys or credentials.
+`providerStatus()` (`src/providers/index.js`) reports a boolean and a coarse kind label per
+vertical (`{ <vertical>: { live: true|false, kind: 'live'|'dataset'|'fallback' } }`), never keys
+or credentials — a regression test serializes the whole status object and asserts it matches no
+`/secret|key|token|password/i` (`test/providers.test.js`).
 
 ### 3.15 Provider layer — SSRF surface and secret handling
 
@@ -470,11 +474,13 @@ Ordered roughly by how soon each bites.
    file can't leak unclaimed keys, **double opt-in** before an address is considered subscribed
    (also closes the sign-someone-else-up hole), one-click unsubscribe honored in every mail, and
    a retention/erasure story (delete on unsubscribe).
-5. **Webhook key issuance is not strictly insert-once.** The revenue ledger dedupes replays by
-   unique `stripe_ref` (§3.11), but `applyEvent` re-mints an API key on any in-window Stripe
-   retry of an API-plan event; only one raw key stays claimable per session, but orphan
-   `api_keys` hashes accumulate. Guard key issuance on the ledger insert being fresh (or on a
-   per-session mint marker) before billing real customers.
+5. **Webhook side effects are not yet transactional (residual).** The insert-once *logic* is now
+   in place — `applyEvent` gates entitlement grant and key minting on the ledger insert being
+   fresh, so a replay mints no second key (§3.11, resolved). What remains is that the ledger
+   insert and the side effects are separate statements with no wrapping transaction: a crash
+   between them on first delivery could record the event while leaving the key unminted, after
+   which the retry is treated as a duplicate. Wrap the record + side effects in a single
+   transaction before billing real customers at volume.
 6. **Live provider responses are trusted to be well-formed.** Upstream JSON is validated for a
    usable integer price and an `https://` URL (§3.15) but is not otherwise schema-checked, and
    there is no user-driven SSRF vector (hosts are fixed/operator-configured). Production should
