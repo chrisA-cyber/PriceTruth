@@ -152,9 +152,11 @@ export function signPayload(rawBody, secret, timestamp = Math.floor(Date.now() /
   return `t=${timestamp},v1=${v1}`;
 }
 
-// Apply a verified event to the database. Idempotent: the billing ledger's
-// UNIQUE stripe_ref means a replayed event is recorded once. Returns a summary
-// of what changed (and, for API plans, the session id whose key was minted).
+// Apply a verified event to the database. Fully idempotent: the billing ledger's
+// UNIQUE stripe_ref is the gate, so a replayed event (Stripe delivers at least
+// once) is recorded once AND performs its entitlement/key side effects exactly
+// once. Returns a summary of what changed (and, for API plans, the session id
+// whose key was minted).
 export function applyEvent(event, db) {
   if (!event || event.type !== 'checkout.session.completed') {
     return { handled: false, type: event && event.type };
@@ -169,9 +171,14 @@ export function applyEvent(event, db) {
   const currency = session.currency || 'usd';
   const livemode = event.livemode ? 1 : 0;
 
-  db.recordBillingEvent({
+  // Idempotency gate. If this stripe_ref was already recorded, this is a replay:
+  // return without granting entitlements or minting another key.
+  const firstTime = db.recordBillingEvent({
     type: event.type, email, plan: plan.id, amount_cents: amount, currency, livemode, stripe_ref: event.id,
   });
+  if (!firstTime) {
+    return { handled: true, duplicate: true, plan: plan.id, email };
+  }
 
   const result = { handled: true, plan: plan.id, email, amount_cents: amount };
 
@@ -183,7 +190,14 @@ export function applyEvent(event, db) {
       ownerEmail: email, stripeRef: session.subscription || session.id || event.id,
     });
     if (session.id) db.putPendingKey(session.id, raw, plan.tier);
-    if (email) db.upsertAccount({ email, plan: 'api', stripeCustomer: session.customer || null });
+    if (email) {
+      // Distinct entitlements share one accounts row: API access is granted by
+      // the api_keys row above, not by accounts.plan, so buying API must never
+      // clobber an existing 'premium' plan (which drives the alert paywall).
+      const existing = db.getAccount(email);
+      const acctPlan = existing && existing.plan === 'premium' ? 'premium' : 'api';
+      db.upsertAccount({ email, plan: acctPlan, stripeCustomer: session.customer || null });
+    }
     result.apiKeyIssued = true;
     result.tier = plan.tier;
   }

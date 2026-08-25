@@ -226,8 +226,12 @@ function wrap(db) {
     // ---- billing ledger ----
     // stripe_ref is UNIQUE, so replaying the same webhook event is a no-op:
     // the INSERT OR IGNORE keeps revenue from being double-counted.
+    // Returns true if this event was newly recorded, false if it was a duplicate
+    // (same stripe_ref already present). Callers use this as the idempotency gate
+    // so replayed webhooks trigger their side effects exactly once.
     recordBillingEvent({ type, email = null, plan = null, amount_cents = 0, currency = 'usd', livemode = 0, stripe_ref = null }) {
-      stmts.insertBilling.run(nowIso(), type, email, plan, amount_cents, currency, livemode ? 1 : 0, stripe_ref);
+      const res = stmts.insertBilling.run(nowIso(), type, email, plan, amount_cents, currency, livemode ? 1 : 0, stripe_ref);
+      return res.changes > 0;
     },
     revenueSummary(recent = 10) {
       const totals = stmts.revenueTotals.get();

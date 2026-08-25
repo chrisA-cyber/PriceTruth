@@ -245,8 +245,11 @@ function createApp({ dbPath } = {}) {
       // there would drop legitimate billing events. Its own signature check is
       // the gate. Everything else that mutates or costs work is rate-limited.
       const isWebhook = pathname === '/api/billing/webhook';
-      if ((isApi && !isWebhook) || pathname.startsWith('/go/') || pathname.startsWith('/download/')) {
-        const limiter = req.method === 'GET' ? readLimiter : writeLimiter;
+      // /billing/mock-* performs DB writes (mints keys, records events), so it is
+      // rate-limited too — treated as a write regardless of HTTP method.
+      const isMockBilling = pathname.startsWith('/billing/mock-');
+      if ((isApi && !isWebhook) || isMockBilling || pathname.startsWith('/go/') || pathname.startsWith('/download/')) {
+        const limiter = (req.method === 'GET' && !isMockBilling) ? readLimiter : writeLimiter;
         const rl = limiter.check(ip);
         if (!rl.ok) {
           res.setHeader('Retry-After', String(rl.retryAfterSec));
@@ -417,7 +420,17 @@ function createApp({ dbPath } = {}) {
   // product, and append a real true-price point so history builds over time.
   async function runSearch(vertical, q) {
     const listing = await searchListing({ vertical, q });
-    const report = analyze({ vertical, advertised_cents: listing.advertised_cents, context: listing.context });
+    let report;
+    try {
+      report = analyze({ vertical, advertised_cents: listing.advertised_cents, context: listing.context });
+    } catch (err) {
+      // A provider handed us a value the engine can't price (out-of-range fee,
+      // implausible amount). Report it as an upstream data problem, not a 500.
+      if (err instanceof RangeError || err instanceof TypeError) {
+        throw new HttpError(502, 'the data source returned a value that could not be priced');
+      }
+      throw err;
+    }
     const id = searchProductId(vertical, listing.name, q);
     db.upsertProduct({
       id, vertical, name: listing.name, url: listing.url,

@@ -5,13 +5,28 @@
 # clearly-labeled estimate and billing runs in simulated "mock" mode. Set the
 # secrets below (marked `sync: false`, so Render prompts for them in the
 # dashboard and they are NEVER stored in this repo) to switch individual data
-# sources and Stripe billing to live. It auto-seeds demo data on boot, so no
-# database needs provisioning.
+# sources and Stripe billing to live.
+#
+# ⚠ DATA DURABILITY. On the `free` plan the container filesystem is EPHEMERAL:
+# it is wiped on every deploy, restart, and idle spin-down/cold-start. The app
+# re-seeds demo products on boot, so it always looks healthy — but any runtime
+# data (paid entitlements, minted API keys, the revenue ledger, alerts, accrued
+# price history) is LOST on restart. That is fine for a demo, but you must NOT
+# enable live Stripe billing on an ephemeral free instance — paying customers'
+# access and keys would silently vanish. To retain data: move to a plan that
+# supports a persistent disk, uncomment the `disk:` block below, and set
+# PRICETRUTH_DB to a path on that disk (the code already honors PRICETRUTH_DB).
 services:
   - type: web
     name: pricetruth
     runtime: node
     plan: free
+    # Persistent storage — REQUIRED before enabling live billing. Uncomment and
+    # switch off the free plan; then set PRICETRUTH_DB (below) to /var/data/...
+    # disk:
+    #   name: pricetruth-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     # `npm run build` boots the whole app on loopback, checks health, and prints
     # a live-vs-fallback report — a real preflight before the service starts.
     buildCommand: npm install && npm run build
@@ -30,6 +45,11 @@ services:
       # Canonical origin for checkout success/cancel URLs, OG tags, and sitemap.
       # Set to the service's public URL, e.g. https://pricetruth.onrender.com
       - key: PUBLIC_BASE_URL
+        sync: false
+      # SQLite location. Defaults to a file inside the (ephemeral on free plan)
+      # code tree. Point this at a mounted persistent disk (e.g.
+      # /var/data/pricetruth.db) once you enable the `disk:` block above.
+      - key: PRICETRUTH_DB
         sync: false
 
       # --- owner-only admin dashboard (/admin, /api/admin/metrics) ----------

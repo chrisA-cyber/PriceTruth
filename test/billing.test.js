@@ -138,10 +138,42 @@ describe('applyEvent', () => {
   it('is idempotent: replaying the same event does not double-count revenue', () => {
     const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'buyer@x.com', sessionId: 'cs_2' });
     billing.applyEvent(ev, db);
-    billing.applyEvent(ev, db); // replay (Stripe retries)
+    const replay = billing.applyEvent(ev, db); // replay (Stripe retries)
+    assert.equal(replay.duplicate, true);
     const rev = db.revenueSummary();
     assert.equal(rev.paid_events, 1);
     assert.equal(rev.gross_cents, 400);
+  });
+
+  it('is idempotent for key issuance: replaying an API checkout does not mint a second key', () => {
+    const ev = billing.mockCompletedEvent({ planId: 'api_starter', email: 'dev@x.com', sessionId: 'cs_dupkey' });
+    const first = billing.applyEvent(ev, db);
+    assert.equal(first.apiKeyIssued, true);
+    const replay = billing.applyEvent(ev, db);
+    assert.equal(replay.duplicate, true);
+    assert.notEqual(replay.apiKeyIssued, true);
+    // Exactly one key exists for this purchase.
+    const tiers = Object.fromEntries(db.metrics().keys_by_tier.map((r) => [r.tier, r.n]));
+    assert.equal(tiers.starter, 1);
+  });
+
+  it('records the actual charged amount (amount_total), not the list price', () => {
+    // A promo-code checkout charges less than the plan list price ($4.00).
+    const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'promo@x.com', sessionId: 'cs_promo', amount_cents: 300 });
+    billing.applyEvent(ev, db);
+    assert.equal(db.revenueSummary().gross_cents, 300);
+  });
+
+  it('buying an API plan does NOT revoke an existing Premium entitlement', () => {
+    const premiumEv = billing.mockCompletedEvent({ planId: 'premium', email: 'both@x.com', sessionId: 'cs_p' });
+    billing.applyEvent(premiumEv, db);
+    assert.equal(db.isPremium('both@x.com'), true);
+    // Same email later buys API Starter.
+    const apiEv = billing.mockCompletedEvent({ planId: 'api_starter', email: 'both@x.com', sessionId: 'cs_a' });
+    billing.applyEvent(apiEv, db);
+    // Premium survives, and the API key was still issued.
+    assert.equal(db.isPremium('both@x.com'), true);
+    assert.ok(db.takePendingKey('cs_a'));
   });
 
   it('ignores non-checkout events', () => {

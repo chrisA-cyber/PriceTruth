@@ -230,6 +230,19 @@ describe('alerts paywall and admin', () => {
     assert.equal((await second.json()).plan, 'premium');
   });
 
+  it('premium accounts are capped at 20 alerts, then 402 with the premium message', async () => {
+    const email = 'cap-test@example.com';
+    // Seed the account + exactly 20 alerts directly, so the per-IP write rate
+    // limit (20 burst) does not interfere with exercising the alert cap.
+    app.db.upsertAccount({ email, plan: 'premium' });
+    for (let i = 0; i < 20; i++) app.db.createAlert({ email, productId: 'vegas-hotel', threshold_cents: 30000 + i });
+    const res = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'lcc-flight' }));
+    assert.equal(res.status, 402);
+    const body = await res.json();
+    assert.match(body.error, /premium accounts are limited to 20/);
+    assert.equal(body.upgrade, null); // premium users get no upsell
+  });
+
   it('invalid email 400s', async () => {
     const res = await postJson(app.base, '/api/alerts', alertBody({ email: 'not-an-email' }));
     assert.equal(res.status, 400);
@@ -483,16 +496,25 @@ describe('search, billing, and admin metrics', () => {
     assert.equal(res.status, 400);
   });
 
-  it('GET /api/admin/metrics is 403 without a token, 200 with the right token', async () => {
+  it('GET /api/admin/metrics is 403 without a token, 403 on a same-length wrong token, 200 with the right token', async () => {
     const denied = await fetch(`${app.base}/api/admin/metrics`);
     assert.equal(denied.status, 403);
 
-    process.env.ADMIN_TOKEN = 'test-admin-token-1234567890';
+    const TOKEN = 'test-admin-token-1234567890';
+    process.env.ADMIN_TOKEN = TOKEN;
     try {
-      const wrong = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': 'nope' } });
+      // Length-mismatch branch (short token).
+      const short = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': 'nope' } });
+      assert.equal(short.status, 403);
+
+      // Same-length WRONG token — the only case that actually exercises the
+      // constant-time crypto.timingSafeEqual comparison (not the length pre-check).
+      const sameLen = 'X'.repeat(TOKEN.length);
+      assert.equal(sameLen.length, TOKEN.length);
+      const wrong = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': sameLen } });
       assert.equal(wrong.status, 403);
 
-      const ok = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': 'test-admin-token-1234567890' } });
+      const ok = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': TOKEN } });
       assert.equal(ok.status, 200);
       const body = await ok.json();
       assert.equal(typeof body.billing.gross_cents, 'number');
@@ -504,6 +526,48 @@ describe('search, billing, and admin metrics', () => {
     } finally {
       delete process.env.ADMIN_TOKEN;
     }
+  });
+
+  it('POST /api/admin/keys mints a working key with a valid token and rejects a bad tier', async () => {
+    const TOKEN = 'admin-mint-token-abcdefghij';
+    process.env.ADMIN_TOKEN = TOKEN;
+    try {
+      const minted = await postJson(app.base, '/api/admin/keys', { label: 'Acme', tier: 'pro' }, { 'X-Admin-Token': TOKEN });
+      assert.equal(minted.status, 201);
+      const { key } = await minted.json();
+      assert.match(key, /^pt_pro_/);
+      // The minted key actually authenticates against the B2B API.
+      const used = await postJson(app.base, '/api/v1/analyze',
+        { vertical: 'flight', advertised_cents: 5900, context: { carrier: 'spirit' } }, { 'X-API-Key': key });
+      assert.equal(used.status, 200);
+
+      // An invalid tier is rejected.
+      const bad = await postJson(app.base, '/api/admin/keys', { label: 'Acme', tier: 'enterprise' }, { 'X-Admin-Token': TOKEN });
+      assert.equal(bad.status, 400);
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
+  });
+
+  it('the webhook route is exempt from the write rate limit (Stripe retries must not 429)', async () => {
+    const { signPayload, mockCompletedEvent } = await import('../src/billing.js');
+    // Same event id every time — idempotent (200 duplicate), so this only proves
+    // the exemption without polluting the ledger. If the webhook were under the
+    // write limiter (capacity 20), the 21st POST in this burst would 429.
+    const event = mockCompletedEvent({ planId: 'premium', email: 'burst@x.com', sessionId: 'cs_burst' });
+    const raw = JSON.stringify(event);
+    const sig = signPayload(raw, 'whsec_test_it');
+    let sawNon200 = false;
+    for (let i = 0; i < 25; i++) {
+      const res = await fetch(`${app.base}/api/billing/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'stripe-signature': sig },
+        body: raw,
+      });
+      await res.arrayBuffer();
+      if (res.status !== 200) { sawNon200 = true; break; }
+    }
+    assert.equal(sawNon200, false, 'no webhook POST should be rate-limited');
   });
 });
 

@@ -36,9 +36,11 @@ describe('billing ledger is replay-safe', () => {
   beforeEach(() => { db = open(':memory:'); });
   afterEach(() => { db.close(); });
 
-  it('a duplicate stripe_ref is ignored (no double revenue)', () => {
-    db.recordBillingEvent({ type: 'checkout.session.completed', plan: 'premium', amount_cents: 400, stripe_ref: 'evt_1' });
-    db.recordBillingEvent({ type: 'checkout.session.completed', plan: 'premium', amount_cents: 400, stripe_ref: 'evt_1' });
+  it('a duplicate stripe_ref is ignored (no double revenue) and reports first-time vs replay', () => {
+    const first = db.recordBillingEvent({ type: 'checkout.session.completed', plan: 'premium', amount_cents: 400, stripe_ref: 'evt_1' });
+    const dup = db.recordBillingEvent({ type: 'checkout.session.completed', plan: 'premium', amount_cents: 400, stripe_ref: 'evt_1' });
+    assert.equal(first, true);   // newly recorded
+    assert.equal(dup, false);    // duplicate — the idempotency gate applyEvent relies on
     const rev = db.revenueSummary();
     assert.equal(rev.paid_events, 1);
     assert.equal(rev.gross_cents, 400);

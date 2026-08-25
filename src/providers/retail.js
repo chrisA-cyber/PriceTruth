@@ -20,14 +20,23 @@ export async function live(q) {
   const headers = {};
   if (process.env.RETAIL_API_KEY) headers.Authorization = `Bearer ${process.env.RETAIL_API_KEY}`;
   const data = await httpJson(url, { headers, timeoutMs: 6000 });
-  if (!data || !Number.isInteger(data.price_cents)) {
-    const err = new Error('retail feed returned no integer price_cents');
+  // Validate magnitudes, not just types: an out-of-range feed value must degrade
+  // to a labeled estimate (the registry catches this throw), never crash the
+  // pricing engine with a 500. Bounds mirror the engine's integer-cents cap.
+  const MAX_CENTS = 1_000_000_000; // $10M, matches money.js isCents
+  if (!Number.isInteger(data.price_cents) || data.price_cents < 0 || data.price_cents > MAX_CENTS) {
+    const err = new Error('retail feed returned an out-of-range price_cents');
     err.status = 502;
     throw err;
   }
   const context = {};
-  if (Number.isInteger(data.shipping_cents)) context.shipping_cents = data.shipping_cents;
-  if (typeof data.taxPct === 'number') context.taxPct = data.taxPct;
+  // Optional fields are included only when sane; a bad one is dropped, not fatal.
+  if (Number.isInteger(data.shipping_cents) && data.shipping_cents >= 0 && data.shipping_cents <= MAX_CENTS) {
+    context.shipping_cents = data.shipping_cents;
+  }
+  if (typeof data.taxPct === 'number' && Number.isFinite(data.taxPct) && data.taxPct >= 0 && data.taxPct <= 1000) {
+    context.taxPct = data.taxPct;
+  }
   return {
     name: typeof data.name === 'string' ? data.name.slice(0, 120) : titleize(q),
     url: typeof data.url === 'string' && data.url.startsWith('https://') ? data.url : null,

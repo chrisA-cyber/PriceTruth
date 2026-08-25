@@ -61,11 +61,14 @@ to run. It auto-seeds its demo data on boot, so no database needs to be provisio
 The server also auto-binds `0.0.0.0` when it detects a hosted platform
 (`RENDER`/`RAILWAY_ENVIRONMENT`/`FLY_APP_NAME`/`DYNO`/`NODE_ENV=production`).
 
-> The free tier's disk is ephemeral and idle instances sleep — fine for a demo, since the
-> app reseeds the demo catalog and 90-day history on every cold start. Alerts or tracked
-> points added at runtime reset on redeploy. For anything persistent, attach a disk (Render)
-> or point `PRICETRUTH_DB` at durable storage, and put TLS in front (the app speaks plain
-> HTTP and expects the platform to terminate TLS).
+> **Durability caveat.** The free tier's disk is ephemeral and idle instances sleep — fine
+> for a demo, since the app reseeds the demo catalog and 90-day history on every cold start.
+> But all runtime data (alerts, tracked points, **and — if you enable live Stripe — paid
+> entitlements, minted API keys, and the revenue ledger**) is wiped on restart/redeploy.
+> **Do not enable live billing on an ephemeral free instance.** For anything persistent,
+> attach a disk and point `PRICETRUTH_DB` at it (see the commented `disk:` block in
+> [`render.yaml`](render.yaml)), and put TLS in front (the app speaks plain HTTP and expects
+> the platform to terminate TLS).
 
 ## Configuration (going live)
 
