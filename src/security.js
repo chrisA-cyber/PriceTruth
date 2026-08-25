@@ -104,6 +104,26 @@ function readJsonBody(req, { limitBytes = 32 * 1024 } = {}) {
   });
 }
 
+// Reads the request body as raw text (no JSON parsing). Needed for webhook
+// signature verification, which must run over the exact bytes received.
+function readRawBody(req, { limitBytes = 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new HttpError(413, `body exceeds ${limitBytes} bytes`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => reject(new HttpError(400, 'request stream error')));
+  });
+}
+
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,24}$/;
 
 const validate = {
@@ -142,4 +162,4 @@ function escapeHtml(s) {
     .replaceAll("'", '&#39;');
 }
 
-export { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml, CSP };
+export { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, readRawBody, validate, escapeHtml, CSP };

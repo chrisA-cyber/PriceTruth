@@ -209,14 +209,25 @@ describe('alerts paywall and admin', () => {
     assert.equal(second.status, 402);
     const body = await second.json();
     assert.ok(body.error);
-    assert.equal(body.upgrade.plan, 'premium');
+    assert.equal(body.upgrade.planId, 'premium');
     assert.ok(body.upgrade.price);
   });
 
-  it('premium: true lifts the limit for the same email', async () => {
+  it('a client-supplied premium flag does NOT lift the limit (entitlement is server-side)', async () => {
+    // The old demo bypass is gone: only a real completed checkout grants premium.
     const res = await postJson(app.base, '/api/alerts', alertBody({ product_id: 'lcc-flight', premium: true }));
-    assert.equal(res.status, 201);
-    assert.equal((await res.json()).created, true);
+    assert.equal(res.status, 402);
+  });
+
+  it('a real premium purchase (mock checkout) lifts the alert limit for that email', async () => {
+    const email = 'premium-buyer@example.com';
+    // Complete a simulated premium checkout for this email.
+    await fetch(`${app.base}/billing/mock-checkout?plan=premium&email=${encodeURIComponent(email)}`, { redirect: 'manual' });
+    const first = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'vegas-hotel' }));
+    const second = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'lcc-flight' }));
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await second.json()).plan, 'premium');
   });
 
   it('invalid email 400s', async () => {

@@ -8,8 +8,11 @@ import { open } from './db.js';
 import { seed } from './seed.js';
 import { analyze, VERTICALS } from './engine/analyze.js';
 import { dealQuality } from './engine/score.js';
-import { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, validate, escapeHtml } from './security.js';
+import { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, readRawBody, validate, escapeHtml } from './security.js';
 import { zip } from './extzip.js';
+import { searchListing, providerStatus, SEARCH_VERTICALS } from './providers/index.js';
+import * as billing from './billing.js';
+import { catalog as subscriptionCatalog, snapshot as subscriptionSnapshot } from './providers/subscriptions.js';
 
 import PKG from '../package.json' with { type: 'json' };
 import HOTEL from './data/fees/hotel.json' with { type: 'json' };
@@ -79,12 +82,17 @@ function productPayload(db, product, { days = 30, includeHistory = false } = {})
 
 function buildMeta() {
   const labelMap = (obj) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v.label]));
+  const plans = Object.fromEntries(Object.entries(billing.PLANS).map(([id, p]) => [id, { id, label: p.label, price: p.price, kind: p.kind, tier: p.tier || null }]));
   return {
     name: 'PriceTruth',
     version: PKG.version,
     currency: 'USD',
     demoData: true,
     verticals: VERTICALS,
+    searchVerticals: SEARCH_VERTICALS,
+    providers: providerStatus(),
+    billing: { mode: billing.mode(), plans },
+    subscriptionCatalog: { snapshot: subscriptionSnapshot, plans: subscriptionCatalog() },
     options: {
       hotelMarkets: labelMap(HOTEL.markets),
       flightCarriers: labelMap(FLIGHT.carriers),
@@ -93,6 +101,23 @@ function buildMeta() {
     },
     partners: labelMap(PARTNERS),
   };
+}
+
+// Base URL for building Stripe redirect/return links. Honors an explicit
+// PUBLIC_BASE_URL, else derives it from the request (proxy-aware).
+function baseUrlFor(req) {
+  const env = process.env.PUBLIC_BASE_URL;
+  if (env && /^https?:\/\//.test(env)) return env.replace(/\/+$/, '');
+  return requestOrigin(req).origin;
+}
+
+// Constant-time admin auth from the X-Admin-Token header.
+function isAdmin(req) {
+  const adminToken = process.env.ADMIN_TOKEN;
+  const provided = req.headers['x-admin-token'];
+  return Boolean(adminToken) && typeof provided === 'string' &&
+    provided.length === adminToken.length &&
+    crypto.timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(adminToken, 'utf8'));
 }
 
 function affiliateUrl(partner, target) {
@@ -118,6 +143,18 @@ function interstitialHtml(partnerLabel, outUrl) {
 PriceTruth may earn a commission at no extra cost to you. That never changes the prices, fees, or scores we show.</p>
 <p><a class="btn" href="${safeUrl}" rel="noopener nofollow sponsored">Continue to ${escapeHtml(partnerLabel)}</a></p>
 <p><a href="/">Back to PriceTruth</a></p>
+</main></body></html>`;
+}
+
+function mockPortalHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Billing portal (simulated)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/styles.css"></head>
+<body class="interstitial"><main class="card" style="max-width:34rem;margin:4rem auto;padding:2rem">
+<h1>Billing portal <span class="chip chip-demo">simulated</span></h1>
+<p>Stripe isn't configured on this deployment, so there is no real billing portal.
+In production (with <code>STRIPE_SECRET_KEY</code> set) this button opens Stripe's hosted
+portal where a customer can update their card, view invoices, or cancel.</p>
+<p><a class="btn" href="/account">Back to your account</a></p>
 </main></body></html>`;
 }
 
@@ -182,6 +219,7 @@ function createApp({ dbPath } = {}) {
     readLimiter.prune();
     writeLimiter.prune();
     b2bLimiter.prune();
+    db.prunePendingKeys(); // drop unclaimed once-shown keys after their TTL
   }, 5 * 60 * 1000);
   if (typeof sweep.unref === 'function') sweep.unref();
 
@@ -202,7 +240,11 @@ function createApp({ dbPath } = {}) {
       }
       isApi = pathname.startsWith('/api/');
       if (isApi) res.setHeader('Cache-Control', 'no-store');
-      if (isApi || pathname.startsWith('/go/') || pathname.startsWith('/download/')) {
+      // The Stripe webhook is exempt: Stripe retries with backoff, and a 429
+      // there would drop legitimate billing events. Its own signature check is
+      // the gate. Everything else that mutates or costs work is rate-limited.
+      const isWebhook = pathname === '/api/billing/webhook';
+      if ((isApi && !isWebhook) || pathname.startsWith('/go/') || pathname.startsWith('/download/')) {
         const limiter = req.method === 'GET' ? readLimiter : writeLimiter;
         const rl = limiter.check(ip);
         if (!rl.ok) {
@@ -219,6 +261,8 @@ function createApp({ dbPath } = {}) {
         handleAffiliate(res, url, pathname);
       } else if (pathname === '/download/extension.zip') {
         handleExtensionDownload(req, res);
+      } else if (pathname.startsWith('/billing/mock-')) {
+        await handleMockBilling(req, res, url, pathname);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         serveStatic(req, res, pathname);
       } else {
@@ -273,19 +317,22 @@ function createApp({ dbPath } = {}) {
       const id = validate.id(body.product_id, 'product_id');
       const threshold = validate.cents(body.threshold_cents, 'threshold_cents');
       if (!db.getProduct(id)) throw new HttpError(404, 'unknown product');
-      const premium = body.premium === true; // demo stand-in for a paid account check
+      // Entitlement is the account's real plan — set by a completed checkout
+      // (Stripe live) or the mock checkout flow. No client-supplied override.
+      const premium = db.isPremium(email);
       const existing = db.countAlertsForEmail(email);
       const limit = premium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT;
       if (existing >= limit) {
         return sendJson(res, 402, {
-          error: premium ? `premium accounts are limited to ${PREMIUM_ALERT_LIMIT} alerts in the demo` : 'free accounts get 1 price alert',
-          upgrade: premium ? null : { plan: 'premium', price: '$4/month', includes: `${PREMIUM_ALERT_LIMIT} alerts, deal-quality digests, price-drop push` },
+          error: premium ? `premium accounts are limited to ${PREMIUM_ALERT_LIMIT} alerts` : 'free accounts get 1 price alert',
+          upgrade: premium ? null : { planId: 'premium', price: '$4/month', includes: `${PREMIUM_ALERT_LIMIT} alerts, deal-quality digests, price-drop push`, checkout: '/api/billing/checkout' },
         });
       }
       db.createAlert({ email, productId: id, threshold_cents: threshold });
       return sendJson(res, 201, {
         created: true,
-        note: 'Demo build: alerts are stored but no email is sent. Production wires this to a mail provider with double opt-in.',
+        plan: premium ? 'premium' : 'free',
+        note: 'Alerts are stored server-side. Email delivery is enabled when a mail provider is configured (double opt-in); until then alerts are recorded and visible via the API.',
       });
     }
     if (req.method === 'POST' && pathname === '/api/admin/keys') {
@@ -302,7 +349,110 @@ function createApp({ dbPath } = {}) {
       const tier = validate.enum(body.tier || 'starter', 'tier', Object.keys(B2B_DAILY_LIMIT));
       return sendJson(res, 201, { key: db.createApiKey(label, tier), tier, note: 'shown once; only a hash is stored' });
     }
+
+    // ---- live search: fetch a real (or labeled-estimate) listing, analyze it,
+    // and record a true-price point so history accrues from real observations.
+    if (req.method === 'POST' && pathname === '/api/search') {
+      const body = await readJsonBody(req);
+      const vertical = validate.enum(body.vertical, 'vertical', SEARCH_VERTICALS);
+      const q = validate.string(body.q, 'q', 120);
+      return sendJson(res, 200, await runSearch(vertical, q));
+    }
+
+    // ---- billing ----
+    if (req.method === 'POST' && pathname === '/api/billing/checkout') {
+      const body = await readJsonBody(req);
+      const planId = validate.enum(body.planId, 'planId', Object.keys(billing.PLANS));
+      const email = body.email === undefined ? undefined : validate.email(body.email);
+      const { url: checkoutUrl, mock } = await billing.createCheckout({ planId, email, baseUrl: baseUrlFor(req) });
+      return sendJson(res, 200, { url: checkoutUrl, mock, mode: billing.mode() });
+    }
+    if (req.method === 'GET' && pathname === '/api/billing/claim') {
+      const sessionId = url.searchParams.get('session_id') || '';
+      if (!/^[A-Za-z0-9_]{6,200}$/.test(sessionId)) throw new HttpError(400, 'invalid session_id');
+      const pending = db.takePendingKey(sessionId);
+      if (!pending) throw new HttpError(404, 'no key to claim for this session (already claimed or not an API purchase)');
+      return sendJson(res, 200, { key: pending.raw_key, tier: pending.tier, note: 'shown once; store it now' });
+    }
+    if (req.method === 'POST' && pathname === '/api/billing/portal') {
+      const body = await readJsonBody(req);
+      const email = validate.email(body.email);
+      const acct = db.getAccount(email);
+      if (!acct || !acct.stripe_customer) {
+        if (billing.mode() === 'mock') return sendJson(res, 200, { url: `${baseUrlFor(req)}/billing/mock-portal`, mock: true });
+        throw new HttpError(404, 'no billing account for that email');
+      }
+      const { url: portalUrl, mock } = await billing.createPortal({ customerId: acct.stripe_customer, baseUrl: baseUrlFor(req) });
+      return sendJson(res, 200, { url: portalUrl, mock });
+    }
+    if (req.method === 'POST' && pathname === '/api/billing/webhook') {
+      const raw = await readRawBody(req);
+      const event = billing.verifyWebhook(raw, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
+      const result = billing.applyEvent(event, db);
+      return sendJson(res, 200, { received: true, ...result });
+    }
+
+    // ---- admin metrics (revenue + usage), token-gated ----
+    if (req.method === 'GET' && pathname === '/api/admin/metrics') {
+      if (!isAdmin(req)) throw new HttpError(403, 'admin token required');
+      return sendJson(res, 200, {
+        billing: { mode: billing.mode(), ...db.revenueSummary(12) },
+        usage: db.metrics(),
+        providers: providerStatus(),
+        generatedAt: new Date().toISOString(),
+      });
+    }
+
     throw new HttpError(404, 'unknown API route');
+  }
+
+  // Fetch a listing via the provider layer, analyze it, upsert it as a tracked
+  // product, and append a real true-price point so history builds over time.
+  async function runSearch(vertical, q) {
+    const listing = await searchListing({ vertical, q });
+    const report = analyze({ vertical, advertised_cents: listing.advertised_cents, context: listing.context });
+    const id = searchProductId(vertical, listing.name, q);
+    db.upsertProduct({
+      id, vertical, name: listing.name, url: listing.url,
+      advertised_cents: listing.advertised_cents, context: listing.context,
+    });
+    db.addPricePoint(id, { advertised_cents: listing.advertised_cents, true_cents: report.truePrice.amount_cents });
+    const stats = db.getStats(id, 90);
+    const score = stats
+      ? dealQuality({ current_cents: report.truePrice.amount_cents, low_cents: stats.low_cents, high_cents: stats.high_cents, avg_cents: stats.avg_cents, feeLoadPct: report.feeLoadPct })
+      : dealQuality({});
+    return { product_id: id, listing, report, stats: stats ? { days: 90, ...stats } : null, score, live: !listing.source.startsWith('estimated') };
+  }
+
+  // Deterministic, slug-safe id for a searched listing (vertical + name/query).
+  function searchProductId(vertical, name, q) {
+    const basis = `${name || q}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+    const suffix = crypto.createHash('sha256').update(`${vertical}:${name}:${q}`).digest('hex').slice(0, 8);
+    const id = `s-${vertical}-${basis || 'q'}-${suffix}`.slice(0, 64);
+    return id;
+  }
+
+  // Mock billing pages (only reachable when STRIPE is unconfigured). They
+  // simulate the Stripe flow so the whole purchase → entitlement/key path is
+  // exercisable without keys, and are clearly labeled as simulations.
+  async function handleMockBilling(req, res, url, pathname) {
+    if (billing.mode() !== 'mock') throw new HttpError(404, 'not found');
+    if (pathname === '/billing/mock-portal') {
+      return sendHtml(res, 200, mockPortalHtml());
+    }
+    if (pathname === '/billing/mock-checkout') {
+      const planId = url.searchParams.get('plan') || '';
+      const plan = billing.getPlan(planId);
+      if (!plan) throw new HttpError(400, 'unknown plan');
+      const email = url.searchParams.get('email') || null;
+      const sessionId = `cs_mock_${crypto.randomBytes(12).toString('hex')}`;
+      const event = billing.mockCompletedEvent({ planId, email, sessionId });
+      billing.applyEvent(event, db);
+      // 303 back to the SPA success page, which claims any minted key.
+      res.writeHead(303, { Location: `/billing/success?session_id=${sessionId}&mock=1` });
+      return res.end();
+    }
+    throw new HttpError(404, 'not found');
   }
 
   async function handleB2b(req, res, url, pathname, ip) {
@@ -405,8 +555,10 @@ function createApp({ dbPath } = {}) {
 
   function serveStatic(req, res, pathname) {
     let rel = pathname === '/' ? 'index.html' : pathname.slice(1);
+    // The staff dashboard is a separate page from the public SPA.
+    if (pathname === '/admin' || pathname === '/admin/') rel = 'admin.html';
     // SPA-friendly: extensionless paths fall through to the app shell.
-    if (!rel.includes('.')) rel = 'index.html';
+    else if (!rel.includes('.')) rel = 'index.html';
     const filePath = path.resolve(PUBLIC_DIR, rel);
     if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
       throw new HttpError(403, 'forbidden');
@@ -441,7 +593,7 @@ function createApp({ dbPath } = {}) {
   return { server, db };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { server, db } = createApp();
   // Bind loopback locally so a dev box is never exposed to the LAN. On a hosted
   // platform (Render/Railway/Fly/Heroku set their own PORT, and Render sets

@@ -103,7 +103,7 @@ function seed(db) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = open();
   seed(db);
   const demoKey = db.createApiKey('local demo key', 'starter');
