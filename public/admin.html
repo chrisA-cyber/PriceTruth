@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Admin — PriceTruth</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="brand" href="/" aria-label="PriceTruth home">
+        <img class="brand-mark" src="/favicon.svg" alt="" width="28" height="28">
+        <span class="brand-name">Price<span class="brand-accent">Truth</span></span>
+      </a>
+      <div class="nav-links">
+        <a href="/">← Back to site</a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="admin" class="app-main" tabindex="-1">
+    <div class="view-head">
+      <h1>Owner dashboard</h1>
+      <p style="color:var(--text-soft)">Revenue, usage, and data-source status. Access is gated by the server's <code class="endpoint">ADMIN_TOKEN</code>; the token is kept only in this tab's session storage and sent as the <code class="endpoint">X-Admin-Token</code> header.</p>
+    </div>
+    <div id="admin-body"></div>
+  </main>
+
+  <script src="/admin.js" defer></script>
+</body>
+</html>

@@ -151,18 +151,18 @@
   <p class="meta">PriceTruth (prototype), operated by <span class="ph">[COMPANY ENTITY]</span> · contact <span class="ph">[CONTACT EMAIL]</span></p>
 
   <div class="callout">
-    <p><strong>The short version:</strong> no accounts, no cookies, no trackers, no analytics, no third-party requests. The only personal data this software stores is an <strong>email address</strong>, and only if you choose to create a price alert. We never sell or share personal data. Ask us to delete your alert email and we will.</p>
+    <p><strong>The short version:</strong> no accounts, no cookies, no trackers, no analytics, and no third-party requests from your browser. The only personal data this software stores is an <strong>email address</strong>, and only if you create a price alert or buy a plan. When a live data source or payment processor is configured, our <em>server</em> makes outbound calls to those providers on your behalf (details below). We never sell or share personal data. Ask us to delete your data and we will.</p>
   </div>
 
   <h3>What we collect, and when</h3>
-  <p><strong>Price alerts — the only personal data.</strong> If you create a price alert we store the email address you enter, the product you chose, and your price threshold. That is the entire record, and it is collected only when you submit the alert form. Browsing, analyzing prices, and viewing history collect nothing. In the current prototype, alerts are stored but <strong>no email is ever sent</strong> — no mail provider is connected. A production version would send alerts only after double opt-in confirmation.</p>
+  <p><strong>Price alerts — the only personal data.</strong> If you create a price alert we store the email address you enter, the product you chose, and your price threshold. That is the entire record, and it is collected only when you submit the alert form. Browsing, analyzing prices, and viewing history collect nothing. Email is sent only when a mail provider is configured, and then only after double opt-in confirmation; until then alerts are stored and readable through the API but no message is sent.</p>
   <p><strong>B2B API keys.</strong> Commercial API users get a key; we store a label they choose, the tier, and a daily usage count. The key itself is stored only as a SHA-256 hash — we cannot recover it and it never appears in logs.</p>
   <p><strong>What we do <em>not</em> collect:</strong></p>
   <ul>
     <li>No accounts, usernames, passwords, or profiles.</li>
     <li>No cookies of any kind — the server never sets one.</li>
     <li>No analytics, pixels, fingerprinting, or session recording.</li>
-    <li>No third-party requests: everything is served from our own origin and our Content-Security-Policy blocks the rest. Our server makes no outbound network calls.</li>
+    <li>No third-party requests <em>from your browser</em>: every page asset is served from our own origin and our Content-Security-Policy blocks the rest. When you run a live search or a checkout, our <strong>server</strong> (not your browser) calls the relevant provider — a search query goes to the configured data source (e.g. Ticketmaster or Amadeus) to fetch a listing, and payments go to Stripe. We send those providers only what the request needs (your search terms; for checkout, the email you provide and the plan). No third-party analytics or advertising calls are ever made.</li>
     <li>No IP logging. IPs are used only in memory for rate limiting, held in short-lived buckets that a background sweep removes within about 10–15 minutes of your last request (sooner under load), and never written to disk.</li>
     <li>No query strings or search terms in logs — only the HTTP method, path, status code, and response time.</li>
     <li>A <code>no-referrer</code> policy, so outbound clicks do not tell the destination site what you were looking at here.</li>
@@ -172,7 +172,7 @@
   <p>The alert email exists for exactly one purpose: sending you the alert you asked for. No marketing, no enrichment, no combining with other data (there is no other data). Where GDPR-style analysis applies, the lawful basis is <strong>consent</strong>: you typed your email into the alert form. You can withdraw it any time by asking us to delete the alert.</p>
 
   <h3>Where it lives</h3>
-  <p>All data sits in a local SQLite database file on the machine running the prototype. No cloud databases, no third-party processors, no international transfers.</p>
+  <p>Your alert emails, accounts, and API-key hashes sit in a SQLite database on the machine running PriceTruth. The only third-party processor is <strong>Stripe</strong>, and only if you make a payment: Stripe handles card data directly (we never see or store it) and receives the email and plan for your purchase, under <a href="https://stripe.com/privacy" rel="noopener">Stripe's privacy policy</a>. Live-search queries are sent to whichever data provider is configured (e.g. Ticketmaster or Amadeus) solely to fetch a listing. There are no advertising or analytics processors.</p>
 
   <h3>No sale, no sharing</h3>
   <p>We do not sell personal information and do not share it with third parties — not with advertisers, data brokers, or affiliate partners. Affiliate links carry a partner tag, never your personal data.</p>
@@ -227,21 +227,24 @@
   </ul>
 
   <h3>7. Price alerts</h3>
-  <p>Creating an alert stores your email and threshold as described in the <a href="#privacy">Privacy Policy</a>. In the prototype no email is sent. Free usage is limited (currently one alert); the premium tier shown in the product is a demo of the intended paywall — no payment is collected.</p>
+  <p>Creating an alert stores your email and threshold as described in the <a href="#privacy">Privacy Policy</a>. Email delivery is enabled when a mail provider is configured (with double opt-in); until then alerts are stored and readable through the API. Free accounts get one alert; Premium raises the limit.</p>
 
-  <h3>8. B2B API</h3>
+  <h3>8. Billing, plans, and refunds</h3>
+  <p>Paid plans (Premium and the B2B API tiers) are billed through <strong>Stripe</strong> when the deployment is configured with Stripe keys; Stripe handles all card data and PriceTruth never sees or stores it. On a deployment without Stripe configured, checkout runs in a clearly-labeled <em>simulation</em> mode: no card is charged and any resulting entitlement or API key is for evaluation only. Subscriptions renew until cancelled; manage or cancel yours anytime from the billing portal linked on your <a href="/account">account page</a>. Because access is delivered immediately and metered, fees are generally non-refundable except where required by law; contact us for billing issues and we will make it right.</p>
+
+  <h3>9. B2B API</h3>
   <p>Commercial API access is governed by these terms plus the API documentation, which covers tiers, daily quotas, and key handling. Keys are shown once and stored only as hashes; keep yours secret. We may throttle, suspend, or revoke keys that exceed quota or violate section 6. Production B2B use would be covered by a separate signed agreement.</p>
 
-  <h3>9. Affiliate links and third-party sites</h3>
+  <h3>10. Affiliate links and third-party sites</h3>
   <p>Outbound partner links pass through an interstitial that discloses our affiliate relationship (see the <a href="#affiliate">Affiliate Disclosure</a>). Third-party sites have their own terms and policies; we are not responsible for them.</p>
 
-  <h3>10. Intellectual property</h3>
+  <h3>11. Intellectual property</h3>
   <p>The PriceTruth software, datasets, and content belong to <span class="ph">[COMPANY ENTITY]</span> or its licensors. Sellers' names and trademarks belong to their owners; their appearance here identifies whose prices are analyzed and implies no affiliation or endorsement.</p>
 
-  <h3>11. Termination and changes</h3>
+  <h3>12. Termination and changes</h3>
   <p>We may suspend or terminate access (including revoking API keys) for violations, abuse, or legal necessity. We may update these terms as the prototype evolves; the current version with its effective date is always at this page, and continued use is acceptance.</p>
 
-  <h3>12. Governing law</h3>
+  <h3>13. Governing law</h3>
   <p>These terms are governed by the laws of <span class="ph">[GOVERNING LAW JURISDICTION]</span>, with disputes belonging to the courts of <span class="ph">[VENUE]</span> — placeholders until a real entity exists.</p>
 </section>
 

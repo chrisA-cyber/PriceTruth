@@ -459,7 +459,7 @@
 
     let lastPayload = null;
 
-    async function submit(premium) {
+    async function submit() {
       clear(status);
       const email = emailInput.value.trim();
       if (!email || !email.includes('@')) {
@@ -474,18 +474,17 @@
       lastPayload = { email, product_id: productId, threshold_cents: cents };
       submitBtn.disabled = true;
       try {
-        const body = premium ? { ...lastPayload, premium: true } : lastPayload;
         const data = await fetchJSON('/api/alerts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(lastPayload),
         });
         status.append(el('p', { class: 'form-success' },
           `Alert set — we'll flag it when the true price drops below ${fmtUSD(cents)}.`));
         if (data && data.note) status.append(el('p', { class: 'disclosure' }, data.note));
       } catch (err) {
         if (err.status === 402 && err.data) {
-          status.append(upsellCard(err.data, () => submit(true)));
+          status.append(upsellCard(err.data, email));
         } else {
           status.append(el('p', { class: 'form-error' }, err.message));
         }
@@ -496,7 +495,7 @@
 
     const form = el('form', {
       'aria-label': 'Set a price alert',
-      onsubmit: (e) => { e.preventDefault(); submit(false); },
+      onsubmit: (e) => { e.preventDefault(); submit(); },
     },
       el('div', { class: 'field' },
         el('label', { for: `alert-email-${productId}` }, 'Email'),
@@ -510,33 +509,35 @@
     wrap.append(
       el('h2', null, 'Price alert'),
       el('p', { style: 'font-size:0.88rem;color:var(--text-soft)' },
-        'Free accounts get 1 alert. Demo build: alerts are stored, no email is sent.'),
+        'Free accounts get 1 alert; Premium raises the limit. Alerts are stored server-side; email is sent once a mail provider is configured.'),
       form,
       status);
     return wrap;
   }
 
-  // The premium paywall card, rendered from the 402 response body.
-  function upsellCard(data, onDemoUpgrade) {
+  // The premium paywall card, rendered from the 402 response body. Its CTA
+  // launches a real (or labeled-mock) checkout, prefilled with the alert email.
+  function upsellCard(data, email) {
     const up = data.upgrade;
     if (!up) {
       return el('p', { class: 'form-error' }, data.error || 'Alert limit reached.');
     }
     const includes = String(up.includes || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const status = el('div', { 'aria-live': 'polite' });
+    const cta = el('button', { class: 'btn', type: 'button' }, 'Upgrade to Premium — $4/mo');
+    cta.addEventListener('click', async () => {
+      cta.disabled = true;
+      try { await startCheckout(up.planId || 'premium', email || undefined); }
+      catch (err) { status.append(el('p', { class: 'form-error' }, err.message)); cta.disabled = false; }
+    });
     return el('div', { class: 'upsell', role: 'note' },
-      el('h3', null, 'You found the paywall ',
-        el('span', { class: 'chip chip-demo' }, 'demo')),
+      el('h3', null, 'Unlock more alerts'),
       el('p', { style: 'margin:0.25rem 0 0.5rem;color:var(--text-soft)' },
         data.error ? `${data.error[0].toUpperCase()}${data.error.slice(1)}.` : 'Free plan limit reached.'),
       el('p', { class: 'upsell-price' }, up.price || '$4/month'),
-      includes.length
-        ? el('ul', null, includes.map((i) => el('li', null, i)))
-        : null,
-      el('button', { class: 'btn', type: 'button', onclick: onDemoUpgrade },
-        'Simulate premium & retry'),
-      el('p', { class: 'fineprint' },
-        'Demo: not purchasable yet — this button just re-sends the request flagged as premium. See ',
-        el('a', { href: '/pricing' }, 'pricing'), ' for the real plan.'));
+      includes.length ? el('ul', null, includes.map((i) => el('li', null, i))) : null,
+      cta, status,
+      el('p', { class: 'fineprint' }, 'See ', el('a', { href: '/pricing' }, 'all plans'), '.'));
   }
 
   /* ================= book direct panel ================= */
@@ -604,7 +605,9 @@
         el('span', { class: 'quote-bubble quote-us' }, '“What will this actually cost me?”')),
       el('p', { class: 'hero-sub' },
         'Coupon extensions ask the first question. PriceTruth answers the second — resort fees, bag fees, service charges, and renewal hikes included, before you hit checkout.'),
-      el('a', { class: 'btn', href: '/analyze' }, 'Analyze a price')));
+      el('div', { style: 'display:flex;gap:0.6rem;flex-wrap:wrap' },
+        el('a', { class: 'btn', href: '/find' }, 'Find a real price'),
+        el('a', { class: 'btn btn-secondary', href: '/analyze' }, 'Analyze a price you have'))));
 
     const grid = el('div', { class: 'product-grid' });
     const section = el('section', { 'aria-label': 'Demo products' },
@@ -612,7 +615,7 @@
         el('h2', null, 'Watching the drip'),
         demoChip()),
       el('p', { style: 'color:var(--text-soft);margin-top:-0.5rem' },
-        'Five tracked example products with synthetic price history — click one for the full breakdown.'),
+        'Tracked products — the demo set (with synthetic history) plus anything found via search. Click one for the full breakdown.'),
       grid);
     root.append(section);
 
@@ -1100,6 +1103,9 @@
       el('h1', null, 'Pricing'),
       el('p', { style: 'color:var(--text-soft)' }, 'Honest numbers deserve honest pricing. The truth layer is free; alerts at scale and the API pay the bills.')));
 
+    const modeBanner = el('div', null);
+    root.append(modeBanner);
+
     const tier = (name, price, unit, items, action, opts) =>
       el('div', { class: `card tier${opts && opts.featured ? ' tier-featured' : ''}` },
         opts && opts.flag ? el('span', { class: 'tier-flag' }, opts.flag) : null,
@@ -1114,23 +1120,34 @@
         'Full fee & tax breakdowns',
         'Price history and deal scores',
         '1 price alert',
-      ], el('a', { class: 'btn btn-secondary', href: '/analyze' }, 'Start analyzing')),
+      ], el('a', { class: 'btn btn-secondary', href: '/find' }, 'Find a price')),
       tier('Premium', '$4', '/month', [
         '20 price alerts on true prices',
         'Weekly deal-quality digests',
         'Instant price-drop alerts',
         'Everything in Free',
-      ], el('button', { class: 'btn', type: 'button', disabled: true }, 'Demo: not purchasable yet'),
-        { featured: true, flag: 'Demo paywall' }),
-      tier('B2B API', 'Custom', '', [
-        'Starter: 100 calls/day',
-        'Pro: 10,000 calls/day',
+      ], checkoutPanel('premium', 'Upgrade to Premium'),
+        { featured: true, flag: 'Most popular' }),
+      tier('B2B API', 'From $49', '/month', [
+        'Starter — 100 calls/day · $49/mo',
+        'Pro — 10,000 calls/day · $399/mo',
         'True-price reports as JSON',
         'Product history endpoints',
-      ], el('a', { class: 'btn btn-secondary', href: '/api-docs' }, 'Read the API docs'))));
+      ], el('div', null,
+        checkoutPanel('api_starter', 'Buy API Starter'),
+        el('div', { style: 'margin-top:0.5rem' }, checkoutPanel('api_pro', 'Buy API Pro', { secondary: true })),
+        el('p', { style: 'margin-top:0.5rem;font-size:0.85rem' }, el('a', { href: '/api-docs' }, 'Read the API docs →'))))));
 
-    root.append(el('p', { style: 'margin-top:1.25rem;font-size:0.85rem;color:var(--text-faint)' },
-      'This is a prototype — Premium is a demo paywall (try adding a second price alert on any product), and API keys are minted locally.'));
+    getMeta().then((meta) => {
+      clear(modeBanner);
+      if (meta.billing && meta.billing.mode === 'mock') {
+        modeBanner.append(el('div', { class: 'notice notice-info' },
+          el('b', null, 'Simulation mode. '),
+          'Stripe isn’t configured on this deployment, so checkout is simulated end-to-end — no card is charged, but the full purchase → entitlement/key flow works. Set ',
+          el('code', { class: 'endpoint' }, 'STRIPE_SECRET_KEY'), ' to accept real payments.'));
+      }
+    }).catch(() => {});
+
     return root;
   }
 
@@ -1235,6 +1252,287 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
     return root;
   }
 
+  /* ================= live price finder ================= */
+
+  function sourceBadge(listing) {
+    const live = listing && !String(listing.source || '').startsWith('estimated');
+    const cls = live ? 'chip chip-live' : 'chip chip-estimate';
+    const label = live ? 'live data' : 'estimated';
+    const note = listing.sourceLabel || '';
+    return el('span', {
+      class: cls, title: note, tabindex: '0',
+      'aria-label': `${live ? 'Live data.' : 'Estimated.'} ${note}`,
+    }, label);
+  }
+
+  const FIND_EXAMPLES = {
+    hotel: ['Las Vegas', 'Miami', 'New York'],
+    flight: ['LAX-LAS', 'SFO to JFK', 'ORD-MIA'],
+    ticket: ['Taylor Swift', 'Lakers', 'Hamilton'],
+    subscription: ['netflix', 'nordvpn', 'wall street journal'],
+    retail: ['wireless headphones', 'air fryer', 'standing desk'],
+  };
+  const FIND_PLACEHOLDER = {
+    hotel: 'City, e.g. Las Vegas',
+    flight: 'Route, e.g. LAX-LAS',
+    ticket: 'Artist, team, or show',
+    subscription: 'Service name, e.g. netflix',
+    retail: 'Product name',
+  };
+
+  function findView() {
+    const root = el('div', null);
+    root.append(el('div', { class: 'view-head' },
+      el('h1', null, 'Find a real price'),
+      el('p', { style: 'color:var(--text-soft);max-width:44rem' },
+        'Search a live listing and see what it will actually cost. Where a data source is connected, results are ',
+        el('b', null, 'live'), '; otherwise they are clearly labeled estimates you can still explore. Every result is tracked, so its true-price history builds over time.')));
+    const holder = el('div', null, loadingBlock('Loading options…'));
+    root.append(holder);
+    getMeta()
+      .then((meta) => { clear(holder); holder.append(buildFinder(meta)); })
+      .catch((err) => { clear(holder); holder.append(errorBlock(err, () => findRetry(holder))); });
+    return root;
+  }
+
+  function findRetry(holder) {
+    clear(holder);
+    holder.append(loadingBlock('Loading options…'));
+    getMeta().then((meta) => { clear(holder); holder.append(buildFinder(meta)); })
+      .catch((e) => { clear(holder); holder.append(errorBlock(e)); });
+  }
+
+  function buildFinder(meta) {
+    const container = el('div', null);
+    const resultHolder = el('div', { 'aria-live': 'polite' });
+    const formStatus = el('div', null);
+    const verticals = meta.searchVerticals || meta.verticals;
+
+    const verticalSel = selectInput(
+      Object.fromEntries(verticals.map((v) => [v, v[0].toUpperCase() + v.slice(1)])), 'ticket');
+    verticalSel.setAttribute('aria-label', 'What are you pricing?');
+    verticalSel.setAttribute('id', 'find-vertical');
+
+    const qInput = el('input', { type: 'text', id: 'find-q', placeholder: FIND_PLACEHOLDER.ticket, 'aria-label': 'Search query' });
+    const submitBtn = el('button', { class: 'btn', type: 'submit' }, 'Reveal the true price');
+
+    const statusLine = el('p', { class: 'find-status' });
+    function refreshStatus() {
+      const v = verticalSel.value;
+      const live = meta.providers && meta.providers[v] && meta.providers[v].live;
+      clear(statusLine);
+      statusLine.append(
+        el('span', { class: live ? 'chip chip-live' : 'chip chip-estimate' }, live ? 'live source connected' : 'no live key'),
+        live
+          ? ' Results for this category come from a live data feed.'
+          : ' Results are clearly-labeled estimates — connect a data source to go live.');
+      qInput.setAttribute('placeholder', FIND_PLACEHOLDER[v] || 'Search');
+    }
+
+    const chipsWrap = el('div', { class: 'example-chips', role: 'group', 'aria-label': 'Example searches' });
+    function refreshChips() {
+      clear(chipsWrap);
+      for (const ex of (FIND_EXAMPLES[verticalSel.value] || [])) {
+        chipsWrap.append(el('button', { type: 'button', onclick: () => { qInput.value = ex; run(); } }, ex));
+      }
+    }
+
+    verticalSel.addEventListener('change', () => { refreshStatus(); refreshChips(); });
+
+    async function run() {
+      clear(formStatus);
+      const q = qInput.value.trim();
+      if (q.length < 2) {
+        formStatus.append(el('p', { class: 'form-error', role: 'alert' }, 'Type at least 2 characters to search.'));
+        return;
+      }
+      clear(resultHolder);
+      resultHolder.append(loadingBlock('Fetching the real price…'));
+      submitBtn.disabled = true;
+      try {
+        const data = await fetchJSON('/api/search', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vertical: verticalSel.value, q }),
+        });
+        clear(resultHolder);
+        resultHolder.append(findResult(data));
+        resultHolder.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (err) {
+        clear(resultHolder);
+        formStatus.append(el('p', { class: 'form-error', role: 'alert' }, err.message));
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    const form = el('form', { 'aria-label': 'Find a real price', onsubmit: (e) => { e.preventDefault(); run(); } },
+      el('div', { class: 'form-grid' },
+        el('div', { class: 'field' }, el('label', { for: 'find-vertical' }, 'Category'), verticalSel),
+        el('div', { class: 'field' }, el('label', { for: 'find-q' }, 'What are you pricing?'), qInput)),
+      statusLine, formStatus, submitBtn);
+
+    refreshStatus();
+    refreshChips();
+
+    container.append(
+      el('p', { style: 'font-weight:650;font-size:0.88rem;color:var(--text-soft);margin-bottom:0.25rem' }, 'Try an example:'),
+      chipsWrap,
+      el('div', { class: 'card', style: 'padding:1.4rem' }, form),
+      resultHolder);
+    return container;
+  }
+
+  function findResult(data) {
+    const { listing, report, score, product_id } = data;
+    const frag = document.createDocumentFragment();
+    frag.append(el('div', { class: 'view-head', style: 'margin-top:1.25rem' },
+      el('h2', { style: 'margin-bottom:0.25rem' }, listing.name),
+      el('p', { style: 'display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center' },
+        verticalBadge(listing.vertical), sourceBadge(listing),
+        listing.degraded ? el('span', { class: 'chip chip-warn', title: listing.sourceLabel }, 'live lookup failed → estimate') : null)));
+    frag.append(reportView(report, { score }));
+    const productLike = { id: product_id, vertical: listing.vertical, url: listing.url, name: listing.name };
+    frag.append(el('section', { class: 'report-section' },
+      el('div', { class: 'card panel' },
+        el('h2', null, 'Keep watching it'),
+        el('p', { style: 'font-size:0.88rem;color:var(--text-soft)' },
+          'This listing is now tracked. Open its page to see the true-price history build, or set an alert.'),
+        el('a', { class: 'btn btn-secondary', href: `/p/${product_id}` }, 'See full history →'))));
+    frag.append(el('section', { class: 'report-section panel-grid' },
+      alertForm(product_id),
+      bookDirectPanel(productLike)));
+    return frag;
+  }
+
+  /* ================= billing / checkout ================= */
+
+  async function startCheckout(planId, email) {
+    const data = await fetchJSON('/api/billing/checkout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(email ? { planId, email } : { planId }),
+    });
+    if (data && data.url) window.location.assign(data.url);
+    else throw new AppError('billing', 'Could not start checkout.');
+  }
+
+  // A CTA that collects an email (needed to attach the plan to an account) and
+  // then redirects to Stripe Checkout (or the labeled mock checkout).
+  function checkoutPanel(planId, buttonLabel, opts) {
+    const status = el('div', { 'aria-live': 'polite' });
+    const emailInput = el('input', { type: 'email', placeholder: 'you@example.com', 'aria-label': 'Email for your plan', autocomplete: 'email' });
+    const btn = el('button', { class: `btn${opts && opts.secondary ? ' btn-secondary' : ''}`, type: 'submit' }, buttonLabel);
+    const form = el('form', {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        clear(status);
+        const v = emailInput.value.trim();
+        if (v && !v.includes('@')) { status.append(el('p', { class: 'form-error' }, 'Enter a valid email address.')); return; }
+        btn.disabled = true;
+        try { await startCheckout(planId, v || undefined); }
+        catch (err) { status.append(el('p', { class: 'form-error' }, err.message)); btn.disabled = false; }
+      },
+    },
+      el('div', { class: 'field' }, el('label', null, 'Email'), emailInput),
+      btn, status);
+    return form;
+  }
+
+  function billingSuccessView() {
+    const root = el('div', null);
+    const params = new URLSearchParams(location.search);
+    const sessionId = params.get('session_id');
+    const isMock = params.get('mock') === '1';
+
+    root.append(el('div', { class: 'view-head' },
+      el('h1', null, 'You’re all set 🎉'),
+      isMock ? el('p', null, el('span', { class: 'chip chip-demo' }, 'simulated'),
+        ' Stripe isn’t configured here, so this was a simulated purchase — no card was charged.') : null));
+
+    const body = el('div', null, loadingBlock('Finalizing your purchase…'));
+    root.append(body);
+
+    if (!sessionId) {
+      clear(body);
+      body.append(el('div', { class: 'card' }, el('p', null, 'Thanks! Your purchase is being processed.'),
+        el('a', { class: 'btn btn-secondary', href: '/' }, 'Back home')));
+      return root;
+    }
+
+    // API purchases have a one-time key to claim; premium purchases won't.
+    fetchJSON(`/api/billing/claim?session_id=${encodeURIComponent(sessionId)}`)
+      .then((data) => {
+        clear(body);
+        body.append(apiKeyReveal(data));
+      })
+      .catch((err) => {
+        clear(body);
+        if (err.status === 404) {
+          body.append(el('div', { class: 'card' },
+            el('h2', null, 'Premium unlocked'),
+            el('p', null, 'Your account now has Premium — up to 20 true-price alerts, digests, and instant drop alerts.'),
+            el('div', { style: 'display:flex;gap:0.6rem;flex-wrap:wrap' },
+              el('a', { class: 'btn', href: '/find' }, 'Find a price to watch'),
+              el('a', { class: 'btn btn-secondary', href: '/account' }, 'Manage billing'))));
+        } else {
+          body.append(errorBlock(err));
+        }
+      });
+    return root;
+  }
+
+  function apiKeyReveal(data) {
+    const card = el('div', { class: 'card' });
+    const keyBox = el('code', { class: 'key-reveal' }, data.key);
+    const copyBtn = el('button', { class: 'btn btn-secondary', type: 'button' }, 'Copy key');
+    copyBtn.addEventListener('click', () => {
+      if (navigator.clipboard) navigator.clipboard.writeText(data.key).then(
+        () => { copyBtn.textContent = 'Copied ✓'; }, () => { copyBtn.textContent = 'Copy failed'; });
+    });
+    card.append(
+      el('h2', null, `API key ready — ${data.tier} tier`),
+      el('p', { class: 'form-success' }, 'Store this now. For your security it is shown only once and cannot be retrieved again.'),
+      el('div', { class: 'key-row' }, keyBox, copyBtn),
+      el('p', { style: 'font-size:0.9rem;color:var(--text-soft)' },
+        'Use it as an ', el('code', { class: 'endpoint' }, 'X-API-Key'), ' header. See the ',
+        el('a', { href: '/api-docs' }, 'API docs'), ' to get started.'));
+    return card;
+  }
+
+  function accountView() {
+    const root = el('div', null);
+    root.append(el('div', { class: 'view-head' },
+      el('h1', null, 'Your account'),
+      el('p', { style: 'color:var(--text-soft);max-width:42rem' },
+        'Manage your subscription and billing. Enter the email you used at checkout to open the billing portal.')));
+
+    const status = el('div', { 'aria-live': 'polite' });
+    const emailInput = el('input', { type: 'email', placeholder: 'you@example.com', 'aria-label': 'Account email', autocomplete: 'email' });
+    const form = el('form', {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        clear(status);
+        const email = emailInput.value.trim();
+        if (!email.includes('@')) { status.append(el('p', { class: 'form-error' }, 'Enter a valid email.')); return; }
+        try {
+          const data = await fetchJSON('/api/billing/portal', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+          });
+          if (data.url) window.location.assign(data.url);
+        } catch (err) {
+          status.append(el('p', { class: 'form-error' }, err.message));
+        }
+      },
+    },
+      el('div', { class: 'field' }, el('label', null, 'Account email'), emailInput),
+      el('button', { class: 'btn', type: 'submit' }, 'Open billing portal'),
+      status);
+
+    root.append(el('div', { class: 'card', style: 'max-width:34rem' }, form),
+      el('p', { style: 'margin-top:1rem;font-size:0.85rem;color:var(--text-faint)' },
+        'Need an API key instead? Buy a plan on the ', el('a', { href: '/pricing' }, 'pricing page'), '.'));
+    return root;
+  }
+
   /* ================= 404 ================= */
 
   function notFoundView() {
@@ -1248,11 +1546,14 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
 
   const ROUTES = [
     { pattern: /^\/$/, title: 'PriceTruth — the actual price of anything online', view: () => homeView() },
+    { pattern: /^\/find$/, title: 'Find a real price — PriceTruth', view: () => findView() },
     { pattern: /^\/p\/([a-z0-9-]{1,64})$/, title: 'Product — PriceTruth', view: (m) => productView(m[1]) },
     { pattern: /^\/analyze$/, title: 'Analyzer — PriceTruth', view: () => analyzeView() },
     { pattern: /^\/pricing$/, title: 'Pricing — PriceTruth', view: () => pricingView() },
     { pattern: /^\/api-docs$/, title: 'B2B API — PriceTruth', view: () => apiDocsView() },
     { pattern: /^\/extension$/, title: 'Browser extension — PriceTruth', view: () => extensionView() },
+    { pattern: /^\/account$/, title: 'Your account — PriceTruth', view: () => accountView() },
+    { pattern: /^\/billing\/success$/, title: 'Purchase complete — PriceTruth', view: () => billingSuccessView() },
   ];
 
   function isSpaPath(path) {
@@ -1307,5 +1608,24 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
 
   window.addEventListener('popstate', render);
 
+  /* ================= consent / privacy notice ================= */
+  // PriceTruth sets no advertising or tracking cookies. This is a one-time,
+  // honest notice (dismissal is remembered in localStorage, not a cookie).
+  function initConsent() {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('pt-consent') === '1'; } catch (e) { /* storage blocked */ }
+    if (dismissed) return;
+    const bar = el('div', { class: 'consent-bar', role: 'region', 'aria-label': 'Privacy notice' },
+      el('p', null,
+        'PriceTruth uses no advertising or tracking cookies. We store only what runs the app. ',
+        el('a', { href: '/legal.html' }, 'Privacy & terms'), '.'),
+      el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => {
+        try { localStorage.setItem('pt-consent', '1'); } catch (e) { /* ignore */ }
+        bar.remove();
+      } }, 'Got it'));
+    document.body.append(bar);
+  }
+
   render();
+  initConsent();
 })();

@@ -783,3 +783,90 @@ body.interstitial h1 { font-size: 1.4rem; }
 .ext-facts { margin: 1rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; color: var(--text-soft); }
 .ext-facts li { line-height: 1.5; }
 .ext-facts b { color: var(--text); }
+
+/* ===== live-data + billing UI (added for production build) ===== */
+.chip-live {
+  background: var(--good-soft);
+  color: var(--good);
+  border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
+}
+.chip-warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+}
+.find-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+  margin: 0.35rem 0 0;
+}
+.notice {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1.1rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.92rem;
+  background: var(--surface-2);
+  color: var(--text-soft);
+}
+.notice-info {
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
+  color: var(--text);
+}
+.key-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.6rem 0;
+}
+.key-reveal {
+  display: inline-block;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.8rem;
+  word-break: break-all;
+  color: var(--text);
+  user-select: all;
+}
+.upsell {
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  background: var(--teal-soft);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.25rem;
+  margin-top: 0.75rem;
+}
+.upsell h3 { margin: 0 0 0.25rem; }
+.upsell-price { font-size: 1.5rem; font-weight: 800; color: var(--teal-strong); margin: 0.25rem 0; }
+.upsell ul { margin: 0.25rem 0 0.75rem 1.1rem; padding: 0; }
+.upsell .fineprint { font-size: 0.8rem; color: var(--text-faint); margin: 0.5rem 0 0; }
+
+/* consent / cookie notice */
+.consent-bar {
+  position: fixed;
+  left: 1rem; right: 1rem; bottom: 1rem;
+  max-width: 44rem;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  padding: 0.9rem 1.1rem;
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  z-index: 50;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+}
+.consent-bar p { margin: 0; }

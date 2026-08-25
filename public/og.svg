@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="PriceTruth — the actual price of anything online">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#134e4a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="80" y="150" font-size="34" fill="#5eead4" font-weight="700" letter-spacing="2">PRICETRUTH</text>
+    <text x="80" y="290" font-size="86" fill="#ffffff" font-weight="800">The actual price</text>
+    <text x="80" y="380" font-size="86" fill="#ffffff" font-weight="800">of anything online.</text>
+    <text x="80" y="470" font-size="34" fill="#a7f3d0">Resort fees, bag fees, service charges, renewal hikes —</text>
+    <text x="80" y="515" font-size="34" fill="#a7f3d0">the true cost, before you check out.</text>
+    <g transform="translate(80,560)">
+      <rect x="0" y="0" width="230" height="44" rx="22" fill="#2dd4bf"/>
+      <text x="115" y="29" font-size="22" fill="#0a1f1c" font-weight="700" text-anchor="middle">true-cost engine</text>
+      <rect x="248" y="0" width="180" height="44" rx="22" fill="rgba(255,255,255,0.14)"/>
+      <text x="338" y="29" font-size="22" fill="#e6fffb" font-weight="600" text-anchor="middle">price history</text>
+      <rect x="446" y="0" width="200" height="44" rx="22" fill="rgba(255,255,255,0.14)"/>
+      <text x="546" y="29" font-size="22" fill="#e6fffb" font-weight="600" text-anchor="middle">deal scores</text>
+    </g>
+  </g>
+</svg>
