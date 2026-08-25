@@ -107,9 +107,14 @@ The strongest compliance position we hold, because it is enforced by code, not
 policy:
 
 - Only personal datum stored: alert email (+ product, threshold). SQLite, local
-  file, no cloud, no processors, no transfers.
-- No accounts, no cookies, no analytics, no third-party requests (CSP
-  `default-src 'self'`; server makes zero outbound calls).
+  file, no cloud, no analytics. In the default configuration: no processors, no
+  transfers. Optional live integrations add named processors with narrow data
+  flows (Stripe = payment/email at checkout; data providers = search terms only)
+  — enumerated in `privacy.md` under "Service providers".
+- No accounts, no cookies, no analytics. The **browser** makes no third-party
+  requests (CSP `default-src 'self'`). The **server** makes zero outbound calls
+  by default, and only server-to-server calls to the configured providers above
+  when those integrations are switched on — never to advertising or analytics.
 - Access logs contain method, path, status, duration — **no IPs, no query
   strings**. IPs live only in in-memory rate-limit buckets, pruned in minutes.
 - B2B keys stored as SHA-256 hashes; raw key shown once at mint.

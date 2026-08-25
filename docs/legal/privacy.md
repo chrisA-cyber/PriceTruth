@@ -14,8 +14,11 @@
 - We do not have user accounts, and we do not want your data.
 - The **only** personal data this software stores is an **email address** — and
   only if you choose to create a price alert.
-- No cookies. No trackers. No analytics. No third-party requests of any kind.
-- We never sell or share personal data.
+- No cookies. No trackers. No analytics. **Your browser** makes no third-party
+  requests — our strict Content-Security-Policy blocks them.
+- We never sell or share personal data. When live data sources or Stripe billing
+  are switched on, the **server** makes server-to-server calls to those providers
+  (see "Service providers" below) — never to advertisers or analytics.
 - Ask us to delete your alert email and we will.
 
 ## What we collect, and when
@@ -41,9 +44,12 @@ recover it, and it never appears in logs.
 - No accounts, usernames, passwords, or profiles.
 - No cookies of any kind — the server never sets one.
 - No analytics, pixels, fingerprinting, or session recording.
-- No third-party requests: every script, style, and image is served from our own
-  origin, and our Content-Security-Policy blocks everything else. Our server
-  makes no outbound network calls.
+- No third-party requests *from your browser*: every script, style, and image is
+  served from our own origin, and our Content-Security-Policy blocks everything
+  else. In its default configuration the server also makes no outbound calls at
+  all. When the operator connects live data sources or Stripe (see "Service
+  providers"), the server makes server-to-server calls to those providers only —
+  never to advertising, analytics, or data-broker services.
 - No IP address logging. IP addresses are used only in memory, for rate limiting
   (abuse prevention). Each address is held in a short-lived bucket that a
   background sweep removes within about 10–15 minutes of your last request, and
@@ -65,16 +71,40 @@ withdraw consent at any time by asking us to delete the alert.
 
 ## Where it lives
 
-All data is stored in a local SQLite database file on the machine running the
-prototype. There are no cloud databases, no third-party processors, and no
-international transfers — the data never leaves the server it was submitted to.
+All data we store is kept in a local SQLite database file on the machine running
+the prototype. There are no analytics clouds and no data brokers. In the default
+configuration there are no third-party processors at all and the data never
+leaves the server it was submitted to. If the operator enables the optional
+integrations below, the specific data noted there is processed by those named
+providers; nothing else is transferred.
+
+## Service providers (subprocessors)
+
+The prototype works fully with **no** external services connected. An operator
+may switch on these integrations; each receives only the data listed and only
+for the stated purpose:
+
+- **Stripe** (payments) — only when billing is set to live mode. When you start a
+  checkout or open the billing portal, we send Stripe the email you enter and the
+  payment details you provide directly to Stripe; Stripe returns a subscription
+  status and (for API plans) triggers issuing your key. We never see or store
+  your card number. With billing in the default **mock** mode, no payment data
+  leaves the server and no card is charged.
+- **Data sources** (Ticketmaster, Amadeus, or an operator-configured retail feed)
+  — only when a given source is connected. To answer a "find a price" search, the
+  server sends your **search terms** for that vertical to the relevant provider.
+  Enter only what you are shopping for; do not put personal information in the
+  search box. With no source connected, searches are answered from local models
+  and nothing is sent anywhere.
 
 ## No sale, no sharing
 
-We do not sell personal information. We do not share it with third parties. We
-do not disclose it to advertisers, data brokers, or affiliate partners. Our
-affiliate links (see the [Affiliate Disclosure](affiliate-disclosure.md)) carry
-a partner tag, never your personal data.
+We do not sell personal information. We do not share it with advertisers, data
+brokers, or affiliate partners. The service providers named above act as
+processors on our behalf for the narrow purposes described, which is not a sale
+or cross-context sharing. Our affiliate links (see the
+[Affiliate Disclosure](affiliate-disclosure.md)) carry a partner tag, never your
+personal data.
 
 ## Retention and deletion
 

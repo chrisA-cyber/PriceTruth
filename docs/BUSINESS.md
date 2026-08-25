@@ -70,14 +70,25 @@ affiliate redirect that always passes through a disclosure interstitial (`/go/:p
 
 Six streams, ranked by expected time to first dollar. All figures are pre-revenue assumptions.
 
+**Built vs. earning — the honest split.** The payment machinery now exists in code. The two
+paid-plan streams below (premium, #4; B2B API, #2) are wired end-to-end through Stripe —
+Checkout → signature-verified webhook → entitlement or API-key issuance → self-serve billing
+portal — with **zero runtime dependencies** (Stripe's REST API over `fetch`, webhook HMAC via
+`node:crypto`; `src/billing.js`, `PLANS`). With no `STRIPE_SECRET_KEY` set it runs in **mock
+mode**: the full checkout → webhook → key/entitlement flow executes locally and in tests,
+labeled a simulation in every UI surface so nothing is ever shown as a real charge. Dropping in
+real keys + price IDs makes it genuinely live. What does *not* yet exist: real customers, real
+revenue, live partner programs, and data-provider contracts at scale. This section describes
+capability, not traction — the billing ledger is empty.
+
 | # | Stream | Model | Unit economics | Time to first $ |
 |---|---|---|---|---|
-| 1 | Travel affiliate commissions | 3–6% of booking value via partner links (`/go/` rails shipped) | ~$80 per converted $2,000 booking at 4% | Days–weeks |
-| 2 | B2B pricing API | Starter $49/mo, Pro $399/mo against shipped quotas | ≥1.6¢/call (starter), ≥0.13¢/call (pro) | Weeks |
-| 3 | Alternative-recommendation referrals | Referral fee when we surface a cheaper/equal alternative (incl. "book direct") | Same rails as #1; higher trust value | Weeks–months |
-| 4 | Premium subscription | $4/mo — multiple alerts, deal digests, price-drop push (402 paywall shipped) | 1–3% of MAU converting | Months |
-| 5 | Travel-site referral placements | Flat-fee partner placements, always disclosure-labeled | $500–$2,000/mo per placement (assumed) | Months |
-| 6 | Fee-index reports | Anonymized aggregate fee data for media/researchers | $2k–$10k per report (assumed) | Quarters |
+| 1 | Travel affiliate commissions | 3–6% of booking value via partner links; disclosure interstitial + open-redirect guard shipped (`/go/:partner`) **[rails wired · needs partner approval]** | ~$80 per converted $2,000 booking at 4% | Days–weeks |
+| 2 | B2B pricing API | Starter $49/mo, Pro $399/mo — Stripe checkout → minted API key against shipped quotas **[wired · mock mode]** | ≥1.6¢/call (starter), ≥0.13¢/call (pro) | Weeks |
+| 3 | Alternative-recommendation referrals | Referral fee when we surface a cheaper/equal alternative (incl. "book direct") **[shares #1 rails]** | Same rails as #1; higher trust value | Weeks–months |
+| 4 | Premium subscription | $4/mo — multiple alerts, deal digests, price-drop push; Stripe checkout → server-enforced entitlement (402 paywall + `/pricing` shipped) **[wired · mock mode]** | 1–3% of MAU converting | Months |
+| 5 | Travel-site referral placements | Flat-fee partner placements, always disclosure-labeled **[future]** | $500–$2,000/mo per placement (assumed) | Months |
+| 6 | Fee-index reports | Anonymized aggregate fee data for media/researchers **[future]** | $2k–$10k per report (assumed) | Quarters |
 
 **Worked example — affiliate (stream 1).** A $2,000 hotel booking at a 4% commission pays $80.
 Per 1,000 hotel-report views: at 3–6% outbound CTR (30–60 clicks) and 1–3% click-to-booking
@@ -87,17 +98,33 @@ run below coupon-extension benchmarks (we tell users when a deal is *bad*), and 
 require partner program approval. The conflict-of-interest risk this stream creates is
 addressed in §7.
 
-**Worked example — premium (stream 4).** $4/mo, converting 1–3% of MAU (typical
-freemium-utility range; unproven for us). 25,000 MAU → 250–750 subscribers → **$1,000–$3,000
-MRR**, before ~5%/mo churn. The paywall already exists: the second alert on a free account
-returns HTTP 402 with the $4/mo upgrade offer (`src/server.js`). Requires real alert emails
-(roadmap, §8) before anyone should pay.
+**Worked example — premium (stream 4).** $4/mo (`PLANS.premium`), converting 1–3% of MAU
+(typical freemium-utility range; unproven for us). 25,000 MAU → 250–750 subscribers →
+**$1,000–$3,000 MRR**, before ~5%/mo churn. The whole path now exists: the freemium 402 paywall
+(the second alert on a free account returns HTTP 402 with the $4/mo upgrade offer) and the
+`/pricing` page drive Stripe Checkout; a signature-verified `checkout.session.completed` webhook
+grants premium server-side (`accounts` table, `db.isPremium`); the customer self-serves through
+the billing portal (`src/billing.js`, `src/server.js`). In mock mode this runs locally, labeled
+a simulation. Still gated on real alert emails (§8) before anyone should actually pay — and no
+one has: zero subscribers today.
 
 **Worked example — B2B API (stream 2).** Starter $49/mo buys up to 100 calls/day (≤3,000/mo →
-floor of ~1.6¢/call); Pro $399/mo buys 10,000/day (≤300,000/mo → ~0.13¢/call). Quotas are
-enforced in code today (`src/server.js`, `B2B_DAILY_LIMIT`). Compute cost per call is
-negligible; the real COGS is data acquisition (§7). One design partner on Starter is a
-credible first B2B dollar inside 90 days.
+floor of ~1.6¢/call); Pro $399/mo buys 10,000/day (≤300,000/mo → ~0.13¢/call) —
+`PLANS.api_starter` / `PLANS.api_pro`. Quotas are enforced in code today (`src/server.js`,
+`B2B_DAILY_LIMIT`). Billing is now wired too: Stripe Checkout → webhook mints a hashed API key →
+the key is revealed **exactly once** on the success page (claim-once via `/api/billing/claim`,
+backed by the `pending_keys` table) → usage is metered and quota-enforced per tier. Compute cost
+per call is negligible; the real COGS is data acquisition (§7). One design partner on Starter is
+a credible first B2B dollar inside 90 days — the machinery to accept that dollar now exists
+(mock today; live the moment real Stripe keys are set). No paying API customer exists yet.
+
+**Revenue visibility.** An owner-only, token-gated admin dashboard (`/admin`, backed by
+`GET /api/admin/metrics`, gated by `ADMIN_TOKEN`) surfaces gross revenue, 7- and 30-day windows,
+active plans by tier, API-call volume, and recent billing events — all read from a replay-safe
+billing ledger that is idempotent on Stripe's event ref (`billing_events.stripe_ref UNIQUE`, so
+a replayed webhook records once; `src/db.js`, `revenueSummary`). The response reports
+`billing.mode`, so today it plainly shows mock-ledger entries as mock — the dashboard never
+mistakes a simulated charge for a real one.
 
 Streams 5 and 6 are deliberately last: placements need demonstrated audience, and fee-index
 reports need a longitudinal dataset that only exists after months of collection. Stream 6
@@ -144,11 +171,36 @@ reports (stream 6) and the Hidden Fee Index (GTM) are the same asset, monetized 
 
 ## 8. 90-day roadmap: prototype → beta
 
+**Already shipped in the prototype (revenue machinery, works in mock mode today).** These were
+"planned" in earlier drafts of this doc; they are now built and tested:
+
+- **Stripe billing, end-to-end, zero-dependency.** All three paid plans (`PLANS`: premium
+  $4/mo, API Starter $49/mo, API Pro $399/mo) run the full Checkout → signature-verified webhook
+  → entitlement/key-issuance → self-serve portal flow (`src/billing.js`, `src/server.js`). Live
+  on real keys; simulated (and clearly labeled) in mock mode when `STRIPE_SECRET_KEY` is absent.
+- **Consumer premium.** Freemium 402 paywall + `/pricing` page → checkout → webhook grants
+  premium server-side (`db.isPremium`, `accounts`).
+- **Metered B2B API keys.** Checkout → webhook mints a hashed key → revealed once (claim-once,
+  `/api/billing/claim`) → per-tier usage metering and quota enforcement.
+- **Owner-only revenue dashboard + replay-safe ledger.** `/admin` + `GET /api/admin/metrics`
+  (token-gated) over an idempotent `billing_events` ledger (`stripe_ref UNIQUE`).
+- **Affiliate rails.** Disclosure interstitial + open-redirect guard (`/go/:partner`).
+
+**Going live is a configuration step, not a build step.** It requires: setting `STRIPE_SECRET_KEY`,
+the webhook signing secret, and the three `STRIPE_PRICE_*` price IDs; verifying the webhook
+endpoint in the Stripe dashboard; and wiring real data-provider keys for full live price
+coverage (the engine ships labeled demo data otherwise). Until then everything above runs in
+mock mode and earns nothing.
+
+**Still genuinely remaining (not built):** real customers and a first real dollar; data-provider
+contracts at scale; transactional alert-email delivery; dunning / failed-payment recovery;
+tax/VAT handling (e.g. Stripe Tax); and SOC-type compliance. These stay future work below.
+
 | Days | Milestone | Definition of done |
 |---|---|---|
 | 1–30 | **Real data, two verticals** | Live collectors for hotels (resort fees + taxes for ~200 tracked properties) and subscriptions (intro/renewal pricing for ~100 services), replacing demo seeds; `demoData` flag retired on covered products. Affiliate program applications submitted (Booking, Expedia — rails already shipped). |
 | 31–60 | **Alerts for real + extension shipped** | Transactional email provider wired to the existing alerts table, **double opt-in** (already committed to in `docs/legal/privacy.md`), unsubscribe in every mail. Extension listed in the Chrome Web Store. First programmatic SEO pages live (per-hotel resort-fee pages from the fee dataset). |
-| 61–90 | **First dollars, both motions** | First affiliate conversion tracked end-to-end. One B2B design partner live on Starter ($49/mo) with a case study. Premium billing enabled behind the shipped 402 paywall. "Hidden Fee Index" v0 drafted from the first 90 days of real data. |
+| 61–90 | **First dollars, both motions** | First affiliate conversion tracked end-to-end. One B2B design partner live on Starter ($49/mo) with a case study — accepting the payment now needs only real Stripe keys, since the checkout → webhook → key-issuance path is already built (mock today). First real premium charge through that same wired path. "Hidden Fee Index" v0 drafted from the first 90 days of real data. |
 
 Exit criteria for "beta": real data in two verticals, a user can be emailed a real alert they
 double-opted into, and at least one revenue stream has produced a nonzero dollar.

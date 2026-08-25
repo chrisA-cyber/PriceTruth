@@ -321,6 +321,249 @@ and are not stored — this is the history-poisoning guard; scores and stats sta
 
 ---
 
+## Public app endpoints (no key)
+
+These are the same-origin endpoints the web app (and browser extension) call directly — **no
+API key required**. They are **rate-limited per IP** (a token bucket, ~20 POST burst / ~120
+GET burst from a single IP with a slow refill), and are meant for the app itself, not for
+third-party integrations — use the keyed `/api/v1/` endpoints for that. All money is integer
+USD cents, as everywhere in this doc.
+
+> **Honesty labeling.** `POST /api/search` never presents an estimate as a live quote: every
+> listing carries `source`, `sourceLabel`, `certainty`, and `degraded` so the caller always
+> knows whether a price came from a live source or a clearly-labeled fallback. Billing
+> responses carry `mock`/`mode` so a simulated checkout is never shown as a real charge.
+
+### POST /api/search
+
+Look up a listing through the provider layer, run it through the true-cost engine, upsert it
+as a tracked product, and append a real price point — so history accrues across repeat
+searches for the same listing. When a live source is configured for the vertical it is used;
+otherwise the response falls back to a deterministic, clearly-labeled **estimate**.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `vertical` | string | yes | One of `hotel`, `flight`, `ticket`, `subscription`, `retail`. |
+| `q` | string | yes | The search query, **2–120 characters** (trimmed). |
+
+#### Response
+
+`200` with the listing, its report, price-history stats, and a deal-quality score:
+
+```json
+{
+  "product_id": "s-ticket-eagles-madison-square-garden-1a2b3c4d",
+  "listing": {
+    "vertical": "ticket",
+    "name": "Eagles — Madison Square Garden",
+    "url": null,
+    "advertised_cents": 8600,
+    "currency": "USD",
+    "context": { "platform": "ticketmaster", "quantity": 2 },
+    "source": "estimated:model",
+    "sourceLabel": "Estimated",
+    "certainty": "estimated",
+    "degraded": false,
+    "fetchedAt": "2026-08-24T17:03:11.208Z"
+  },
+  "report": { "…": "the standard Report object — vertical, advertised, truePrice, lineItems, feeLoadPct, confidence, assumptions, disclosures" },
+  "stats": { "days": 90, "n": 1, "low_cents": 13400, "high_cents": 13400, "avg_cents": 13400 },
+  "score": { "score": 41, "label": "fair deal", "reasons": ["…"] },
+  "live": false
+}
+```
+
+(The concrete numbers above are illustrative — the exact figures depend on whether a live
+source answered or the labeled estimate was used, and on the query.)
+
+Field notes:
+
+- `product_id` is a deterministic slug `s-<vertical>-<slug>-<8 hex chars>`, derived from the
+  vertical, listing name, and query. The same search maps to the same product, so repeated
+  searches accrue into one history (window fixed at **90 days** here).
+- `listing.source` is the machine tag for where the price came from — e.g. `live:amadeus`
+  (hotel/flight), `live:ticketmaster` (ticket), `live:retail-feed` (retail), `dataset:plans`
+  (subscription), or `estimated:model` (labeled fallback). `sourceLabel` is the
+  human-readable version.
+- `listing.certainty` is the listing-level provenance: `live` (real-time source), `typical`
+  (dated catalog/dataset), or `estimated` (labeled fallback). This is distinct from the
+  per-line-item `certainty` **inside** `report`, which uses the report vocabulary
+  `listed`/`typical`/`estimated` (see [The Report object](#the-report-object)).
+- `listing.degraded` is `true` **only** when a live source was configured but the lookup
+  failed and the response fell back to a labeled estimate — the price is an estimate, not a
+  live quote. When no live source is configured at all, the fallback is used with
+  `degraded: false`.
+- `live` is `true` when the listing came from a live source (i.e. `source` does **not** start
+  with `estimated`), and `false` for a labeled estimate. Together with `certainty` and
+  `degraded`, this tells the caller whether they are holding a live quote or a labeled
+  estimate.
+- **Subscription is a special case:** it is always answered from a dated catalog snapshot
+  shipped in the repo. A matched plan returns `source: "dataset:plans"`,
+  `certainty: "typical"`, `live: true` — it is "live" in the *status* sense but is
+  **point-in-time catalog pricing, not a real-time quote**, so verify current pricing before
+  relying on it. A query that matches no catalogued plan degrades to a labeled
+  `estimated:model` example (`certainty: "estimated"`, `degraded: true`, `live: false`).
+- `stats` is the 90-day price-history summary (`{days: 90, n, low_cents, high_cents,
+  avg_cents}`), or `null` when there is no history; `score` is the deal-quality object (same
+  shape and 0–100 scale as `GET /api/v1/products/:id`).
+
+Errors: `400` for an unknown `vertical`, or a `q` outside 2–120 characters.
+
+curl:
+
+```sh
+curl -s http://localhost:4780/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"vertical":"ticket","q":"eagles madison square garden"}'
+```
+
+### POST /api/billing/checkout
+
+Start a checkout for one plan and get a URL to redirect the browser to.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `planId` | string | yes | One of `premium` (consumer), `api_starter`, `api_pro` (API tiers). |
+| `email` | string | no | Prefills the buyer's email on the checkout. |
+
+#### Response
+
+`200`:
+
+```json
+{ "url": "https://checkout.stripe.com/c/pay/cs_live_…", "mock": false, "mode": "live" }
+```
+
+- In **live mode** (a `STRIPE_SECRET_KEY` is set) `url` is a real Stripe Checkout Session
+  URL, `mock` is `false`, and `mode` is `"live"`.
+- In **mock mode** (no `STRIPE_SECRET_KEY`) `url` points at the app's own
+  `/billing/mock-checkout` simulation page, `mock` is `true`, and `mode` is `"mock"`. The
+  mock flow exercises the whole checkout → entitlement/key path locally without charging
+  anything, and is clearly labeled as a simulation.
+
+Errors: `400` for an unknown `planId` or an invalid `email`.
+
+### GET /api/billing/claim?session_id=&lt;id&gt;
+
+After an **API-plan** checkout (`api_starter` / `api_pro`) completes, the newly-minted API
+key is staged for exactly **one** reveal on the buyer's success page. This endpoint returns
+it once.
+
+#### Response
+
+`200`:
+
+```json
+{ "key": "pt_starter_5f0pbZiUEfILdKezgjLl9G5pRZWo1oWn", "tier": "starter", "note": "shown once; store it now" }
+```
+
+- The key is shown **once** — a second `claim` for the same `session_id` returns `404`.
+- Consumer (`premium`) checkouts mint no API key, so `claim` returns `404` for them.
+- `400` if `session_id` is missing or malformed (it must match `[A-Za-z0-9_]{6,200}`).
+
+As with `npm run keygen`, only a hash of the key is stored server-side; once claimed (or once
+its short TTL lapses unclaimed) it cannot be retrieved again.
+
+### POST /api/billing/portal
+
+Return a URL where a customer can self-serve manage or cancel their subscription.
+
+#### Request body
+
+`{ "email": "buyer@example.com" }`
+
+#### Response
+
+`200`:
+
+```json
+{ "url": "https://billing.stripe.com/p/session/…", "mock": false }
+```
+
+- **Live mode:** a real Stripe billing-portal URL for the account's Stripe customer. Returns
+  `404` if no billing account exists for that email.
+- **Mock mode:** `url` points at the app's `/billing/mock-portal` simulation page, with
+  `mock: true` (no live account required).
+- `400` for an invalid `email`.
+
+### POST /api/billing/webhook
+
+Stripe webhook receiver — **called by Stripe, not by app users.** It verifies the
+`Stripe-Signature` header with HMAC-SHA256 against `STRIPE_WEBHOOK_SECRET` (scheme
+`t=<ts>,v1=<hmac>`, constant-time compare, 300-second timestamp tolerance). On a valid
+`checkout.session.completed` it records a replay-safe billing event (a `UNIQUE` Stripe
+reference means a retried event is counted once) and then either:
+
+- grants the **premium** plan to the buyer's account (consumer plan), or
+- mints and stages an **API key** for one-time claim (API plans).
+
+#### Response
+
+`200` `{ "received": true, … }` (the `…` summarizes what was applied). Returns `400` on a
+bad, missing, or stale signature.
+
+This endpoint is intentionally **exempt from rate limiting** — Stripe retries with backoff,
+and its signature check is the gate.
+
+### GET /api/admin/metrics
+
+Owner-only operational metrics: revenue, usage, and per-vertical provider status. Requires an
+`X-Admin-Token` header matching the `ADMIN_TOKEN` environment variable (constant-time
+compare).
+
+```
+X-Admin-Token: <your ADMIN_TOKEN>
+```
+
+Returns `403` when `ADMIN_TOKEN` is unset on the server or the supplied token does not match.
+
+#### Response
+
+`200`:
+
+```json
+{
+  "billing": {
+    "mode": "mock",
+    "gross_cents": 5300,
+    "paid_events": 3,
+    "last_30d_cents": 5300,
+    "last_7d_cents": 4900,
+    "recent": [ { "…": "most-recent billing events" } ],
+    "active_plans": [ { "…": "plan → active-account counts" } ]
+  },
+  "usage": {
+    "keys_by_tier": [ { "…": "tier → API-key counts" } ],
+    "api_calls_today": 12,
+    "api_calls_7d": 87,
+    "alerts": 4,
+    "products": 9,
+    "price_points": 214
+  },
+  "providers": {
+    "hotel": { "live": false },
+    "flight": { "live": false },
+    "ticket": { "live": false },
+    "subscription": { "live": true },
+    "retail": { "live": false }
+  },
+  "generatedAt": "2026-08-24T17:03:11.208Z"
+}
+```
+
+- `billing.mode` is `"live"` or `"mock"` — the same live-vs-mock distinction as the checkout
+  endpoints. **All money is integer cents.**
+- `providers` reports, per vertical, whether a live source is wired up right now
+  (`{"live": boolean}`); no secrets are exposed. `subscription` is always `live: true`
+  because it is backed by the shipped dataset snapshot (point-in-time catalog data, not a
+  real-time quote).
+
+---
+
 ## The Report object
 
 | Field | Type | Meaning |
@@ -388,6 +631,12 @@ Invoke-RestMethod -Uri 'http://localhost:4780/api/v1/analyze' -Method Post `
 
 ## Changelog
 
+- **2026-08-24** — Added public same-origin endpoints (no API key, IP rate-limited):
+  `POST /api/search` (live-or-labeled-estimate listing lookup → true-cost report → price-point
+  ingestion) and Stripe-backed billing — `POST /api/billing/checkout`, `GET /api/billing/claim`,
+  `POST /api/billing/portal`, `POST /api/billing/webhook` — plus owner-only
+  `GET /api/admin/metrics`. Billing runs live with Stripe keys or in a clearly-labeled mock
+  mode; the webhook is exempt from rate limiting.
 - **v1 — 2026-08-21** — Initial release: `POST /api/v1/analyze` (five verticals),
   `GET /api/v1/products/:id` (30-day stats, score, history), `GET /api/v1/usage`,
   `POST /api/v1/track` (plausibility-banded price-point ingestion); API-key auth
