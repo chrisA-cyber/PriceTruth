@@ -106,12 +106,14 @@ the engine still reveals shipping/handling/tax on top — which is the whole poi
 ## Price history
 
 Every `POST /api/search` upserts the listing as a tracked product and appends a **real price
-point** (advertised + computed true cost, both integer cents) to SQLite. So history is
-genuine and accrues over time from actual searches — distinct from the **seeded demo
-products**, whose 90-day history is deterministic synthetic data, clearly flagged as demo in
-the API (`demoData: true`). Deal-quality scores combine position-in-range, distance from the
-average, and fee load; with too little history the score degrades gracefully rather than
-inventing a trend.
+point** (advertised + computed true cost, both integer cents) to SQLite. So history accrued
+from actual searches is genuine, whereas the **five seeded demo products** ship with 90 days
+of deterministic synthetic history for demonstration. Note that the `demoData: true` flag on
+product-backed API responses is applied to **every** such read as a conservative
+prototype-wide marker — it is not a per-product genuine-vs-seeded signal (a search-tracked
+product read back through those endpoints also carries it). Deal-quality scores combine
+position-in-range, distance from the average, and fee load; with too little history the score
+degrades gracefully rather than inventing a trend.
 
 ## Boundaries & honesty notes
 

@@ -8,6 +8,10 @@ import { hashStr, bandCents, titleize } from './http.js';
 
 export const vertical = 'subscription';
 
+// This provider is backed by a dated in-repo snapshot, not a live feed — the UI
+// uses this to label it honestly as a catalog snapshot rather than "live data".
+export const kind = 'dataset';
+
 // Dataset lookup is always "configured" — it ships in the repo.
 export function configured() {
   return true;

@@ -43,9 +43,14 @@ async function main() {
     if (db.listProducts().length === 0) problems.push('demo data did not seed on boot');
 
     // Config report — honest live/mock picture for whoever is deploying.
+    const SOURCE_KIND = {
+      live: 'LIVE (real-time feed)',
+      dataset: 'dataset (dated catalog snapshot)',
+      fallback: 'fallback (labeled estimate)',
+    };
     console.log('\n  Data sources:');
     for (const [vertical, s] of Object.entries(meta.providers || {})) {
-      console.log(`    ${vertical.padEnd(13)} ${s.live ? 'LIVE' : 'fallback (labeled estimate)'}`);
+      console.log(`    ${vertical.padEnd(13)} ${SOURCE_KIND[s.kind] || (s.live ? 'LIVE' : 'fallback (labeled estimate)')}`);
     }
     console.log(`\n  Billing: ${meta.billing.mode.toUpperCase()}${meta.billing.mode === 'mock' ? ' (simulation — set STRIPE_SECRET_KEY to go live)' : ''}`);
     for (const p of Object.values(meta.billing.plans || {})) {

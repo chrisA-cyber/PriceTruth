@@ -59,7 +59,7 @@ describe('subscription dataset', () => {
     // configured()===true but live() throws 404 → registry degrades to fallback.
     assert.equal(listing.degraded, true);
     assert.equal(listing.certainty, 'estimated');
-    assert.match(listing.sourceLabel, /live lookup failed/i);
+    assert.match(listing.sourceLabel, /live lookup unavailable/i);
   });
 });
 
@@ -91,7 +91,7 @@ describe('live source failure degrades honestly', () => {
     const listing = await searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' });
     assert.equal(listing.degraded, true);
     assert.equal(listing.certainty, 'estimated');
-    assert.match(listing.sourceLabel, /live lookup failed/i);
+    assert.match(listing.sourceLabel, /live lookup unavailable/i);
     assert.ok(Number.isInteger(listing.advertised_cents));
   });
 
@@ -115,8 +115,12 @@ describe('providerStatus exposes booleans only (no secrets)', () => {
     for (const vertical of SEARCH_VERTICALS) {
       assert.equal(typeof status[vertical].live, 'boolean');
     }
-    // subscription ships a dataset, so it is always "live".
+    // subscription ships a dataset, so it is always "live" but of kind 'dataset'
+    // (not a real-time feed) — the UI uses this to avoid mislabeling it.
     assert.equal(status.subscription.live, true);
+    assert.equal(status.subscription.kind, 'dataset');
+    // A vertical with no key configured reports the 'fallback' kind.
+    assert.equal(status.retail.kind, 'fallback');
     const serialized = JSON.stringify(status);
     assert.ok(!/secret|key|token|password/i.test(serialized));
   });

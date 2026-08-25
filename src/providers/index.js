@@ -63,21 +63,31 @@ export async function searchListing({ vertical, q }) {
       return normalize(live, { vertical });
     } catch (err) {
       // Live source configured but failed — degrade to the labeled fallback.
+      // Log the detail (which can include the upstream host/status) server-side
+      // only; the client label stays generic so we never disclose internal
+      // infrastructure or which third-party credentials are currently failing.
+      console.warn(`[providers] live ${vertical} lookup failed, using fallback: ${err.message}`);
       const fb = provider.fallback(query);
       fb.degraded = true;
-      fb.sourceLabel = `${fb.sourceLabel} (live lookup failed: ${err.message})`.slice(0, 200);
+      fb.sourceLabel = `${fb.sourceLabel} (live lookup unavailable)`.slice(0, 200);
       return normalize(fb, { vertical });
     }
   }
   return normalize(provider.fallback(query), { vertical });
 }
 
-// For /api/meta and the admin dashboard: which verticals have a live source
-// wired up right now. No secrets are exposed — just booleans.
+// For /api/meta and the admin dashboard: which verticals have a source wired up
+// right now, and of what kind. No secrets are exposed — booleans + a kind tag.
+//   kind 'live'     — a real-time API is configured and reachable-in-principle
+//   kind 'dataset'  — answers come from a dated in-repo snapshot, not a live feed
+//   kind 'fallback' — no source configured; answers are labeled estimates
+// `live` stays a boolean for backward compatibility (true for live OR dataset).
 export function providerStatus() {
   const status = {};
   for (const [vertical, provider] of Object.entries(PROVIDERS)) {
-    status[vertical] = { live: provider.configured() };
+    const configured = provider.configured();
+    const kind = configured ? (provider.kind || 'live') : 'fallback';
+    status[vertical] = { live: configured, kind };
   }
   return status;
 }

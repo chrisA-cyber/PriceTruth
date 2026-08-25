@@ -1254,15 +1254,22 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
 
   /* ================= live price finder ================= */
 
+  // Badge the listing by its certainty, never by "not estimated". A dated
+  // catalog snapshot (certainty 'typical', e.g. a matched subscription) is real
+  // but is NOT a live real-time quote, so it must never wear the green "live"
+  // chip — that is the product's core honesty rule.
+  const SOURCE_BADGE = {
+    live: { cls: 'chip chip-live', label: 'live data', say: 'Live data.' },
+    typical: { cls: 'chip chip-typical', label: 'catalog snapshot', say: 'Catalog snapshot (point-in-time, not a live quote).' },
+    estimated: { cls: 'chip chip-estimate', label: 'estimated', say: 'Estimated.' },
+  };
   function sourceBadge(listing) {
-    const live = listing && !String(listing.source || '').startsWith('estimated');
-    const cls = live ? 'chip chip-live' : 'chip chip-estimate';
-    const label = live ? 'live data' : 'estimated';
-    const note = listing.sourceLabel || '';
+    const b = SOURCE_BADGE[(listing && listing.certainty)] || SOURCE_BADGE.estimated;
+    const note = (listing && listing.sourceLabel) || '';
     return el('span', {
-      class: cls, title: note, tabindex: '0',
-      'aria-label': `${live ? 'Live data.' : 'Estimated.'} ${note}`,
-    }, label);
+      class: b.cls, title: note, tabindex: '0',
+      'aria-label': `${b.say} ${note}`,
+    }, b.label);
   }
 
   const FIND_EXAMPLES = {
@@ -1317,15 +1324,17 @@ const { product, report, stats, score, history, usage } = await res.json();`)));
     const submitBtn = el('button', { class: 'btn', type: 'submit' }, 'Reveal the true price');
 
     const statusLine = el('p', { class: 'find-status' });
+    const STATUS = {
+      live: { cls: 'chip chip-live', label: 'live source connected', say: ' Results for this category come from a live data feed.' },
+      dataset: { cls: 'chip chip-typical', label: 'catalog snapshot', say: ' Results come from a dated catalog snapshot in the app, not a live feed — verify current pricing.' },
+      fallback: { cls: 'chip chip-estimate', label: 'no live key', say: ' Results are clearly-labeled estimates — connect a data source to go live.' },
+    };
     function refreshStatus() {
       const v = verticalSel.value;
-      const live = meta.providers && meta.providers[v] && meta.providers[v].live;
+      const p = (meta.providers && meta.providers[v]) || {};
+      const s = STATUS[p.kind] || (p.live ? STATUS.live : STATUS.fallback);
       clear(statusLine);
-      statusLine.append(
-        el('span', { class: live ? 'chip chip-live' : 'chip chip-estimate' }, live ? 'live source connected' : 'no live key'),
-        live
-          ? ' Results for this category come from a live data feed.'
-          : ' Results are clearly-labeled estimates — connect a data source to go live.');
+      statusLine.append(el('span', { class: s.cls }, s.label), s.say);
       qInput.setAttribute('placeholder', FIND_PLACEHOLDER[v] || 'Search');
     }
 

@@ -790,6 +790,14 @@ body.interstitial h1 { font-size: 1.4rem; }
   color: var(--good);
   border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
 }
+/* Real but point-in-time (a dated catalog snapshot) — deliberately NOT green,
+   so it never reads as a live real-time quote. */
+.chip-typical {
+  background: var(--info-soft);
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+  cursor: help;
+}
 .chip-warn {
   background: var(--amber-soft);
   color: var(--amber);
