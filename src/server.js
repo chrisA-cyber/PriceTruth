@@ -270,8 +270,14 @@ function createApp({ dbPath } = {}) {
         throw new HttpError(405, 'method not allowed');
       }
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 500;
-      const message = err instanceof HttpError ? err.message : 'internal server error';
+      // HttpError is authoritative. Otherwise honor a well-formed client-error
+      // status (4xx) carried on the error — the provider/billing layers throw
+      // plain Errors with err.status (e.g. a bad webhook signature is a 400, a
+      // too-short search query is a 400) and those messages are intentional and
+      // non-sensitive. Anything else is an unexpected 500 with a generic body.
+      const carried = Number.isInteger(err?.status) && err.status >= 400 && err.status <= 499 ? err.status : null;
+      const status = err instanceof HttpError ? err.status : (carried ?? 500);
+      const message = (err instanceof HttpError || carried) ? err.message : 'internal server error';
       if (status === 500) console.error(`[error] ${req.method} ${pathname}:`, err);
       if (res.headersSent) { res.end(); }
       else if (isApi) sendJson(res, status, { error: message });

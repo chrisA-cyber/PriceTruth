@@ -387,6 +387,126 @@ describe('affiliate interstitial and static serving', () => {
   });
 });
 
+describe('search, billing, and admin metrics', () => {
+  let app;
+  const savedWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  before(async () => {
+    delete process.env.STRIPE_SECRET_KEY;         // stay in mock billing mode
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_it';
+    app = await startApp();
+  });
+  after(async () => {
+    await stopApp(app);
+    if (savedWebhookSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+    else process.env.STRIPE_WEBHOOK_SECRET = savedWebhookSecret;
+  });
+
+  it('POST /api/search returns an analyzed, tracked listing and builds history', async () => {
+    const r1 = await postJson(app.base, '/api/search', { vertical: 'retail', q: 'sony wh-1000xm5' });
+    assert.equal(r1.status, 200);
+    const d1 = await r1.json();
+    assert.equal(d1.listing.vertical, 'retail');
+    assert.ok(Number.isInteger(d1.report.truePrice.amount_cents));
+    assert.equal(typeof d1.live, 'boolean');
+    assert.ok(d1.product_id.startsWith('s-retail-'));
+
+    // Searching again for the same query appends another price point (history).
+    const r2 = await postJson(app.base, '/api/search', { vertical: 'retail', q: 'sony wh-1000xm5' });
+    const d2 = await r2.json();
+    assert.equal(d2.product_id, d1.product_id);
+    const hist = await (await fetch(`${app.base}/api/products/${d2.product_id}`)).json();
+    assert.ok(hist.history.length >= 2, 'repeat searches should accrue history');
+  });
+
+  it('POST /api/search 400s on an unknown vertical', async () => {
+    const res = await postJson(app.base, '/api/search', { vertical: 'boats', q: 'yacht' });
+    assert.equal(res.status, 400);
+  });
+
+  it('POST /api/billing/checkout returns a mock checkout URL', async () => {
+    const res = await postJson(app.base, '/api/billing/checkout', { planId: 'api_starter', email: 'dev@x.com' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.mock, true);
+    assert.equal(body.mode, 'mock');
+    assert.ok(body.url.includes('/billing/mock-checkout'));
+  });
+
+  it('mock API checkout mints a key that is claimable exactly once', async () => {
+    // Follow the mock-checkout redirect to get the session id.
+    const res = await fetch(`${app.base}/billing/mock-checkout?plan=api_starter&email=dev2@x.com`, { redirect: 'manual' });
+    assert.equal(res.status, 303);
+    const loc = res.headers.get('location');
+    const sessionId = new URLSearchParams(loc.split('?')[1]).get('session_id');
+    assert.ok(sessionId);
+
+    const claim1 = await fetch(`${app.base}/api/billing/claim?session_id=${sessionId}`);
+    assert.equal(claim1.status, 200);
+    const key = (await claim1.json()).key;
+    assert.match(key, /^pt_starter_/);
+
+    // Second claim is gone (claim-once).
+    const claim2 = await fetch(`${app.base}/api/billing/claim?session_id=${sessionId}`);
+    assert.equal(claim2.status, 404);
+  });
+
+  it('POST /api/billing/webhook verifies signature, applies event, and is idempotent', async () => {
+    const { signPayload, mockCompletedEvent } = await import('../src/billing.js');
+    const event = mockCompletedEvent({ planId: 'premium', email: 'wh@x.com', sessionId: 'cs_webhook_1' });
+    const raw = JSON.stringify(event);
+    const sig = signPayload(raw, 'whsec_test_it');
+
+    const send = () => fetch(`${app.base}/api/billing/webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'stripe-signature': sig },
+      body: raw,
+    });
+    const ok = await send();
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).received, true);
+
+    // Replay: still 200, but revenue is not double-counted (checked via admin).
+    const replay = await send();
+    assert.equal(replay.status, 200);
+  });
+
+  it('POST /api/billing/webhook rejects a tampered body', async () => {
+    const { signPayload, mockCompletedEvent } = await import('../src/billing.js');
+    const event = mockCompletedEvent({ planId: 'premium', email: 'wh@x.com', sessionId: 'cs_webhook_2' });
+    const sig = signPayload(JSON.stringify(event), 'whsec_test_it');
+    const tampered = JSON.stringify({ ...event, id: 'evt_swapped' });
+    const res = await fetch(`${app.base}/api/billing/webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'stripe-signature': sig },
+      body: tampered,
+    });
+    assert.equal(res.status, 400);
+  });
+
+  it('GET /api/admin/metrics is 403 without a token, 200 with the right token', async () => {
+    const denied = await fetch(`${app.base}/api/admin/metrics`);
+    assert.equal(denied.status, 403);
+
+    process.env.ADMIN_TOKEN = 'test-admin-token-1234567890';
+    try {
+      const wrong = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': 'nope' } });
+      assert.equal(wrong.status, 403);
+
+      const ok = await fetch(`${app.base}/api/admin/metrics`, { headers: { 'x-admin-token': 'test-admin-token-1234567890' } });
+      assert.equal(ok.status, 200);
+      const body = await ok.json();
+      assert.equal(typeof body.billing.gross_cents, 'number');
+      assert.ok(body.usage && typeof body.usage.products === 'number');
+      assert.ok(body.providers && typeof body.providers.retail.live === 'boolean');
+      // Ledger = $49 api_starter (mock checkout) + $4 premium (webhook). The
+      // replayed premium webhook must NOT double-count it to 5700.
+      assert.equal(body.billing.gross_cents, 5300);
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
+  });
+});
+
 describe('rate limiting', () => {
   let app;
   before(async () => { app = await startApp(); }); // fresh instance: full GET budget
