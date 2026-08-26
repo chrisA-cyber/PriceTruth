@@ -313,11 +313,12 @@ work uses two concrete Functions:
    validated published site origin. Preview/branch invocations are disabled by
    the non-published runtime policy. It stays inside the 30-second Scheduled
    Function limit. Because Netlify automatically clocks Scheduled Functions only
-   for published deploys, this scheduled-only entry point may attest an exact
-   production main-origin match when its runtime `published` flag is stale.
-   Ordinary web and background Functions never use that exception, so an old
-   skew-protected production deploy cannot regain live credentials at the main
-   hostname.
+   for published deploys, this scheduled-only entry point may trust the exact
+   `production` deploy context when its runtime `published` flag is stale. Its
+   dispatch destination still comes from the independently validated configured
+   or main site origin. Ordinary web and background Functions never use that
+   exception, so old skew-protected production code cannot regain live
+   credentials at the main hostname.
 2. `netlify/functions/worker-background.mjs` owns that exact private path in
    background mode. It rejects missing, altered, future, or more-than-five-minute-old
    signatures before initializing the app. Every valid invocation claims
