@@ -85,6 +85,7 @@ jobs:
             --publish 127.0.0.1:4780:4780 \
             --tmpfs /tmp \
             --volume pricetruth-ci-data:/var/lib/pricetruth \
+            --env NODE_ENV=development \
             --env PUBLIC_BASE_URL=http://localhost:4780 \
             --env ENABLE_ACCOUNTS=0 \
             --env ENABLE_LIVE_BILLING=0 \

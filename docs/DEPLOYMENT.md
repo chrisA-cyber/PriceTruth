@@ -49,7 +49,11 @@ docker run --rm --read-only --tmpfs /tmp \
 `compose.yaml` is a hardened single-host example: all Linux capabilities are
 dropped, privilege escalation is disabled, the root filesystem is read-only,
 and only the data volume and memory-backed `/tmp` are writable. Bind through a
-TLS reverse proxy; do not publicly expose plain port 4780.
+TLS reverse proxy; do not publicly expose plain port 4780. Its default
+localhost configuration explicitly overrides the image to development mode so
+the loopback demo can boot without weakening the production HTTPS-origin gate.
+Set `NODE_ENV=production` only together with a real public HTTPS
+`PUBLIC_BASE_URL` and the complete production environment.
 
 ## Required production configuration
 

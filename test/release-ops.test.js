@@ -26,6 +26,7 @@ describe('release operations contracts', () => {
     assert.match(renderDemo, /healthCheckPath: \/api\/ready/);
     assert.doesNotMatch(renderDemo, /key: STRIPE_(?:SECRET|WEBHOOK|PRICE|PRODUCT)/);
     const compose = read('compose.yaml');
+    assert.match(compose, /NODE_ENV: \$\{NODE_ENV:-development\}/);
     assert.match(compose, /PUBLIC_BASE_URL: \$\{PUBLIC_BASE_URL:-http:\/\/localhost:4780\}/);
     assert.match(compose, /ENABLE_DEMO_SEED: "1"/);
   });
@@ -59,6 +60,7 @@ describe('release operations contracts', () => {
       'npm run extension:package', 'npm run test:e2e', 'npm run test:a11y',
       'npm audit --omit=dev --audit-level=high', 'docker build --pull',
     ]) assert.ok(ci.includes(command), command);
+    assert.match(ci, /--env NODE_ENV=development/);
     assert.match(ci, /--env PUBLIC_BASE_URL=http:\/\/localhost:4780/);
     assert.match(ci, /--env SUBSCRIPTION_CATALOG_MAX_AGE_DAYS=93/);
     for (const endpoint of ['/', '/api/health', '/api/ready', '/api/meta', '/api/openapi']) {
