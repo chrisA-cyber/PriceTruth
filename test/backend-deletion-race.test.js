@@ -61,7 +61,7 @@ describe('private report deletion race defenses', () => {
   it('cancels queued refresh work when a private report or account is deleted', async () => {
     const priorWorker = process.env.DISABLE_WORKER;
     process.env.DISABLE_WORKER = '1';
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     try {
       const first = app.db.verifyAccount(app.db.getOrCreateAccount('delete-report@example.test').id);
       privateProduct(app.db, first.id, 's-retail-delete-report');
@@ -114,7 +114,7 @@ describe('private report deletion race defenses', () => {
     process.env.DISABLE_WORKER = '1';
     process.env.RETAIL_API_URL = `${upstreamBase}/lookup`;
     process.env.PROVIDER_QUERY_CACHE_SECONDS = '1';
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     try {
       const account = app.db.verifyAccount(app.db.getOrCreateAccount('in-flight-delete@example.test').id);
       privateProduct(app.db, account.id);

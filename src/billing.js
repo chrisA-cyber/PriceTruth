@@ -108,7 +108,7 @@ export function readiness({ email = { ok: true }, database = null, priceCatalog 
     apiProProduct: /^prod_[A-Za-z0-9_]{8,}$/.test(process.env.STRIPE_PRODUCT_API_PRO || ''),
     priceCatalogVerified: priceCatalog?.ok === true,
     publicHttps: httpsOrigin(process.env.PUBLIC_BASE_URL || ''),
-    durableDbConfigured: Boolean(
+    durableDbConfigured: database?.storage === 'postgres' || Boolean(
       process.env.PRICETRUTH_DB && path.isAbsolute(process.env.PRICETRUTH_DB) && process.env.PRICETRUTH_DB !== ':memory:' &&
       (!database || database.storage !== 'memory')
     ),
@@ -118,6 +118,7 @@ export function readiness({ email = { ok: true }, database = null, priceCatalog 
     outboxEncryption: String(process.env.OUTBOX_ENCRYPTION_KEY || '').length >= 32,
     emailWebhookSecret: String(process.env.RESEND_WEBHOOK_SECRET || '').length >= 24,
     workerEnabled: process.env.DISABLE_WORKER !== '1',
+    workerDispatchSecret: process.env.WORKER_MODE !== 'netlify-background' || String(process.env.WORKER_DISPATCH_SECRET || '').length >= 32,
     legalOperator: legalText(process.env.LEGAL_OPERATOR_NAME),
     legalJurisdiction: legalText(process.env.LEGAL_JURISDICTION),
     legalSupport: supportContact(),
@@ -363,40 +364,73 @@ const CRITICAL_EVENTS = new Set([
   ...REFUND_AUDIT_EVENTS, 'charge.refunded',
 ]);
 
-export function applyEvent(event, db) {
-  return db.transaction(() => {
-    const result = applyEventTransaction(event, db);
+// Related Stripe event ids can describe the same immutable business object
+// (for example invoice.paid + invoice.payment_succeeded, or successive
+// cumulative charge.refunded events). Take exactly one canonical lock per
+// event so read/compute/write decisions serialize without multi-lock ordering
+// hazards. The Postgres adapter implements this as a transaction-scoped
+// advisory lock; SQLite is already serialized by its guarded connection.
+function billingObjectLock(event) {
+  const object = event?.data?.object;
+  if (!object || typeof object !== 'object') return null;
+  if (INVOICE_EVENTS.has(event.type) && typeof object.id === 'string') {
+    return { scope: 'invoice', objectId: object.id };
+  }
+  if (event.type === 'charge.refunded' && typeof object.id === 'string') {
+    return { scope: 'charge', objectId: object.id };
+  }
+  if (REFUND_AUDIT_EVENTS.has(event.type)) {
+    if (typeof object.charge === 'string') return { scope: 'charge', objectId: object.charge };
+    if (typeof object.id === 'string') return { scope: 'refund', objectId: object.id };
+  }
+  if (DISPUTE_EVENTS.has(event.type) && typeof object.id === 'string') {
+    return { scope: 'dispute', objectId: object.id };
+  }
+  if (SUBSCRIPTION_EVENTS.has(event.type) && typeof object.id === 'string') {
+    return { scope: 'subscription', objectId: object.id };
+  }
+  if (CHECKOUT_EVENTS.has(event.type) && typeof object.id === 'string') {
+    return { scope: 'checkout', objectId: object.id };
+  }
+  return null;
+}
+
+export async function applyEvent(event, db) {
+  return db.transaction(async () => {
+    const objectLock = billingObjectLock(event);
+    if (objectLock) await db.lockBillingObject(objectLock.scope, objectLock.objectId);
+    const result = await applyEventTransaction(event, db);
     const critical = Boolean(event?.livemode) && CRITICAL_EVENTS.has(event?.type);
-    if (result.handled) db.resolveBillingReconciliation(event.id);
+    if (result.handled) await db.resolveBillingReconciliation(event.id);
     else if (critical && result.reason !== 'awaiting asynchronous payment confirmation') {
-      const reconciliation = db.recordBillingReconciliation({ eventId: event.id, eventType: event.type, reason: result.reason || 'event could not be mapped', payload: billingPayload(event) });
+      const reconciliation = await db.recordBillingReconciliation({ eventId: event.id, eventType: event.type, reason: result.reason || 'event could not be mapped', payload: billingPayload(event) });
       return { ...result, retryable: true, reconciliationId: reconciliation.event_id };
     }
     return result;
   });
 }
 
-function applyEventTransaction(event, db) {
+async function applyEventTransaction(event, db) {
   if (!event || typeof event.type !== 'string' || typeof event.id !== 'string') return { handled: false, type: event && event.type };
   if (event.type.startsWith('customer.subscription.')) {
-    return SUBSCRIPTION_EVENTS.has(event.type) ? applySubscriptionEvent(event, db) : { handled: true, ignored: true, type: event.type };
+    return SUBSCRIPTION_EVENTS.has(event.type) ? await applySubscriptionEvent(event, db) : { handled: true, ignored: true, type: event.type };
   }
   if (event.type.startsWith('invoice.')) {
-    return INVOICE_EVENTS.has(event.type) ? applyInvoiceEvent(event, db) : { handled: true, ignored: true, type: event.type };
+    return INVOICE_EVENTS.has(event.type) ? await applyInvoiceEvent(event, db) : { handled: true, ignored: true, type: event.type };
   }
   if (event.type === 'charge.refunded') return applyRefundEvent(event, db);
   if (DISPUTE_EVENTS.has(event.type)) return applyDisputeEvent(event, db);
   if (event.type.startsWith('refund.')) {
-    return REFUND_AUDIT_EVENTS.has(event.type) ? applyRefundAuditEvent(event, db) : { handled: true, ignored: true, type: event.type };
+    return REFUND_AUDIT_EVENTS.has(event.type) ? await applyRefundAuditEvent(event, db) : { handled: true, ignored: true, type: event.type };
   }
   if (['checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type) ||
       (event.type === 'checkout.session.completed' && event.data?.object?.payment_status === 'unpaid')) {
     const session = event.data?.object || {};
     const plan = getPlan(session?.metadata?.plan || session.client_reference_id);
-    const account = accountForObject(session, db, { enforceCustomer: Boolean(event.livemode) });
-    const deleted = !account && db.getDeletedAccountForBilling({ accountId: session?.metadata?.account_id, customerId: session.customer });
+    const account = await accountForObject(session, db, { enforceCustomer: Boolean(event.livemode) });
+    const deleted = !account && await db.getDeletedAccountForBilling({ accountId: session?.metadata?.account_id, customerId: session.customer });
     if (deleted && typeof session.id === 'string') {
-      const first = db.recordBillingEvent({
+      const first = await db.recordBillingEvent({
         type: event.type, plan: plan?.id || null, amount_cents: 0, currency: session.currency || 'usd',
         livemode: event.livemode, stripe_ref: event.id,
         payload: { objectId: session.id, status: 'post-deletion-checkout-terminal' },
@@ -406,11 +440,11 @@ function applyEventTransaction(event, db) {
     if (!plan || !account || typeof session.id !== 'string') {
       return { handled: false, type: event.type, reason: 'checkout terminal state is not linked to a known account, intent, and plan' };
     }
-    const intent = db.getCheckoutIntentBySession(account.id, session.id);
+    const intent = await db.getCheckoutIntentBySession(account.id, session.id);
     if (event.livemode && (!intent || intent.plan !== plan.id || typeof session?.metadata?.account_id !== 'string')) {
       return { handled: false, type: event.type, reason: 'checkout terminal state does not match an account-owned intent' };
     }
-    const first = db.recordBillingEvent({
+    const first = await db.recordBillingEvent({
       type: event.type, email: account.email, accountId: account.id, plan: plan.id,
       amount_cents: 0, currency: session.currency || 'usd', livemode: event.livemode,
       stripe_ref: event.id, payload: billingPayload(event),
@@ -419,7 +453,7 @@ function applyEventTransaction(event, db) {
     const expiresAt = Number.isInteger(session.expires_at) ? new Date(session.expires_at * 1000).toISOString() : null;
     const terminal = event.type === 'checkout.session.expired' ? 'expired'
       : event.type === 'checkout.session.async_payment_failed' ? 'failed' : 'awaiting_payment';
-    db.terminalCheckoutIntent(account.id, session.id, terminal, session.payment_status || (terminal === 'failed' ? 'failed' : 'unpaid'), expiresAt);
+    await db.terminalCheckoutIntent(account.id, session.id, terminal, session.payment_status || (terminal === 'failed' ? 'failed' : 'unpaid'), expiresAt);
     return { handled: true, plan: plan.id, email: account.email, checkoutStatus: terminal };
   }
   if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type)) return { handled: false, type: event.type };
@@ -435,11 +469,11 @@ function applyEventTransaction(event, db) {
 
   // Idempotency gate. If this stripe_ref was already recorded, this is a replay:
   // return without granting entitlements or minting another key.
-  const resolvedAccount = accountForObject(session, db, { enforceCustomer: Boolean(event.livemode) });
-  const account = resolvedAccount || (!event.livemode && email ? db.getOrCreateAccount(email.toLowerCase()) : null);
-  const deleted = !account && db.getDeletedAccountForBilling({ accountId: session?.metadata?.account_id, customerId: session.customer });
+  const resolvedAccount = await accountForObject(session, db, { enforceCustomer: Boolean(event.livemode) });
+  const account = resolvedAccount || (!event.livemode && email ? await db.getOrCreateAccount(email.toLowerCase()) : null);
+  const deleted = !account && await db.getDeletedAccountForBilling({ accountId: session?.metadata?.account_id, customerId: session.customer });
   if (event.livemode && deleted && typeof session.id === 'string') {
-    const first = db.recordBillingEvent({
+    const first = await db.recordBillingEvent({
       type: event.type, plan: plan.id, amount_cents: 0, currency, livemode,
       stripe_ref: event.id, payload: { objectId: session.id, status: 'post-deletion-checkout-completion' },
     });
@@ -450,7 +484,7 @@ function applyEventTransaction(event, db) {
   }
   if (event.livemode && !account) return { handled: false, reason: 'checkout account no longer exists or ownership does not match' };
   if (event.livemode) {
-    const intent = typeof session.id === 'string' && account ? db.getCheckoutIntentBySession(account.id, session.id) : null;
+    const intent = typeof session.id === 'string' && account ? await db.getCheckoutIntentBySession(account.id, session.id) : null;
     const subtotal = session.amount_subtotal, total = session.amount_total;
     const discount = session.total_details?.amount_discount ?? 0;
     const tax = session.total_details?.amount_tax ?? 0;
@@ -466,10 +500,10 @@ function applyEventTransaction(event, db) {
     if (!intent || intent.plan !== plan.id) return { handled: false, reason: 'live checkout does not match an account-owned checkout intent' };
     if (typeof session.subscription !== 'string' || typeof session.customer !== 'string') return { handled: false, reason: 'live checkout is missing subscription ownership references' };
   }
-  if (account && typeof session.customer === 'string' && !db.linkStripeCustomer(account.id, session.customer) && event.livemode) {
+  if (account && typeof session.customer === 'string' && !await db.linkStripeCustomer(account.id, session.customer) && event.livemode) {
     return { handled: false, reason: 'Stripe customer is linked to a different account' };
   }
-  const firstTime = db.recordBillingEvent({
+  const firstTime = await db.recordBillingEvent({
     // Stripe Checkout proves fulfillment but invoice/charge events are the cash
     // ledger. Live checkout is audit-only to avoid counting the first invoice
     // twice; local mock mode keeps its synthetic amount for demo metrics.
@@ -482,13 +516,13 @@ function applyEventTransaction(event, db) {
 
   const result = { handled: true, plan: plan.id, email, amount_cents: amount };
   const sourceRef = session.subscription || session.id || event.id;
-  const staleEntitlement = Boolean(account && db.isStaleEntitlementEvent(account.id, sourceRef, event.created));
+  const staleEntitlement = Boolean(account && await db.isStaleEntitlementEvent(account.id, sourceRef, event.created));
 
   if (plan.kind === 'consumer' && plan.grantsPlan && (account || email)) {
-    const current = account || db.getOrCreateAccount(email.toLowerCase());
+    const current = account || await db.getOrCreateAccount(email.toLowerCase());
     let grantApplied = false;
     if (!staleEntitlement) {
-      const entitlement = db.upsertEntitlement({
+      const entitlement = await db.upsertEntitlement({
         accountId: current.id,
         product: plan.grantsPlan,
         status: 'active',
@@ -497,22 +531,22 @@ function applyEventTransaction(event, db) {
         eventCreated: event.created,
       });
       if (!entitlement.applied) return { handled: true, stale: true, plan: plan.id, email: current.email, entitlement: entitlement.status };
-      db.retireOtherEntitlements(current.id, sourceRef, plan.grantsPlan, event.created);
-      db.syncAccountPlan(current.id);
+      await db.retireOtherEntitlements(current.id, sourceRef, plan.grantsPlan, event.created);
+      await db.syncAccountPlan(current.id);
       grantApplied = ['active', 'trialing'].includes(entitlement.status);
     }
-    if (session.id) db.registerCheckoutClaim({ sessionId: session.id, accountId: current.id, plan: plan.id, status: 'complete' });
-    if (session.id) db.completeCheckoutIntent(current.id, plan.id, session.id);
+    if (session.id) await db.registerCheckoutClaim({ sessionId: session.id, accountId: current.id, plan: plan.id, status: 'complete' });
+    if (session.id) await db.completeCheckoutIntent(current.id, plan.id, session.id);
     if (grantApplied) result.granted = plan.grantsPlan;
     if (staleEntitlement) result.stale = true;
   } else if (plan.kind === 'api') {
     let activeForCheckout = !account;
     if (account) {
       if (staleEntitlement) {
-        const current = db.getEntitlementBySource(account.id, sourceRef, `api:${plan.tier}`);
+        const current = await db.getEntitlementBySource(account.id, sourceRef, `api:${plan.tier}`);
         activeForCheckout = Boolean(current && ['active', 'trialing'].includes(current.status));
       } else {
-        const entitlement = db.upsertEntitlement({
+        const entitlement = await db.upsertEntitlement({
           accountId: account.id,
           product: `api:${plan.tier}`,
           status: 'active',
@@ -521,23 +555,23 @@ function applyEventTransaction(event, db) {
           eventCreated: event.created,
         });
         if (!entitlement.applied) return { handled: true, stale: true, plan: plan.id, email: account.email, entitlement: entitlement.status };
-        db.retireOtherEntitlements(account.id, sourceRef, `api:${plan.tier}`, event.created);
-        db.syncApiKeysForAccount(account.id);
+        await db.retireOtherEntitlements(account.id, sourceRef, `api:${plan.tier}`, event.created);
+        await db.syncApiKeysForAccount(account.id);
         activeForCheckout = ['active', 'trialing'].includes(entitlement.status);
       }
     }
     if (!activeForCheckout) return { handled: true, stale: staleEntitlement, plan: plan.id, email: account?.email || email, apiKeyIssued: false };
-    const existingClaim = session.id ? db.getCheckoutClaim(session.id) : null;
+    const existingClaim = session.id ? await db.getCheckoutClaim(session.id) : null;
     if (existingClaim) return { handled: true, duplicateCheckout: true, stale: staleEntitlement, plan: plan.id, email: account?.email || email, apiKeyIssued: existingClaim.status !== 'complete', tier: plan.tier };
-    const raw = db.createApiKey(email ? `checkout:${email}` : `checkout:${plan.id}`, plan.tier, {
+    const raw = await db.createApiKey(email ? `checkout:${email}` : `checkout:${plan.id}`, plan.tier, {
       ownerEmail: email, ownerAccountId: account?.id || null, stripeRef: session.subscription || session.id || event.id,
     });
-    if (session.id) db.putPendingKey(session.id, raw, plan.tier, account?.id || null);
+    if (session.id) await db.putPendingKey(session.id, raw, plan.tier, account?.id || null);
     if (account) {
-      db.syncAccountPlan(account.id);
+      await db.syncAccountPlan(account.id);
     }
-    if (session.id) db.registerCheckoutClaim({ sessionId: session.id, accountId: account?.id || null, plan: plan.id, tier: plan.tier, status: 'claimable' });
-    if (session.id && account) db.completeCheckoutIntent(account.id, plan.id, session.id);
+    if (session.id) await db.registerCheckoutClaim({ sessionId: session.id, accountId: account?.id || null, plan: plan.id, tier: plan.tier, status: 'claimable' });
+    if (session.id && account) await db.completeCheckoutIntent(account.id, plan.id, session.id);
     result.apiKeyIssued = true;
     result.tier = plan.tier;
     if (staleEntitlement) result.stale = true;
@@ -594,19 +628,19 @@ function resolvePlanFromObject(object, live = false, { allowMultipleAudit = fals
   return { plan: supported[0], metadataPlan: planFromMetadata(object), reason: null };
 }
 
-function accountForObject(object, db, { enforceCustomer = false } = {}) {
+async function accountForObject(object, db, { enforceCustomer = false } = {}) {
   const accountId = object?.metadata?.account_id || object?.subscription_details?.metadata?.account_id || object?.parent?.subscription_details?.metadata?.account_id;
   if (typeof accountId === 'string') {
-    const account = db.getAccountById(accountId);
+    const account = await db.getAccountById(accountId);
     if (!account) return null;
     if (typeof object?.customer === 'string') {
-      const owner = db.getAccountByStripeCustomer(object.customer);
+      const owner = await db.getAccountByStripeCustomer(object.customer);
       if (enforceCustomer && ((owner && owner.id !== account.id) || (account.stripe_customer && account.stripe_customer !== object.customer))) return null;
     }
     return account;
   }
   if (typeof object?.customer === 'string') {
-    const account = db.getAccountByStripeCustomer(object.customer);
+    const account = await db.getAccountByStripeCustomer(object.customer);
     if (account) return account;
   }
   // Live fulfillment is ownership-bound to immutable account metadata or an
@@ -615,7 +649,7 @@ function accountForObject(object, db, { enforceCustomer = false } = {}) {
   if (enforceCustomer) return null;
   const email = object?.customer_email || object?.customer_details?.email || object?.metadata?.email;
   if (typeof email !== 'string') return null;
-  const account = db.getOrCreateAccount(email.toLowerCase());
+  const account = await db.getOrCreateAccount(email.toLowerCase());
   if (enforceCustomer && typeof object?.customer === 'string' && account.stripe_customer && account.stripe_customer !== object.customer) return null;
   return account;
 }
@@ -627,14 +661,14 @@ function entitlementStatus(status, deleted = false) {
   return 'inactive';
 }
 
-function applySubscriptionEvent(event, db) {
+async function applySubscriptionEvent(event, db) {
   const subscription = event.data?.object || {};
   const resolvedPlan = resolvePlanFromObject(subscription, Boolean(event.livemode));
   const plan = resolvedPlan.plan;
-  const account = accountForObject(subscription, db, { enforceCustomer: Boolean(event.livemode) });
-  const deleted = !account && db.getDeletedAccountForBilling({ accountId: subscription?.metadata?.account_id, customerId: subscription.customer });
+  const account = await accountForObject(subscription, db, { enforceCustomer: Boolean(event.livemode) });
+  const deleted = !account && await db.getDeletedAccountForBilling({ accountId: subscription?.metadata?.account_id, customerId: subscription.customer });
   if (deleted && typeof subscription.id === 'string') {
-    const first = db.recordBillingEvent({
+    const first = await db.recordBillingEvent({
       type: event.type, plan: plan?.id || null, amount_cents: 0, currency: subscription.currency || 'usd',
       livemode: event.livemode, stripe_ref: event.id,
       payload: { objectId: subscription.id, status: 'post-deletion-subscription', eventCreated: Number.isInteger(event.created) ? event.created : null },
@@ -642,7 +676,7 @@ function applySubscriptionEvent(event, db) {
     return { handled: true, duplicate: !first, deletedAccount: true, auditOnly: true, entitlementPolicy: 'no-resurrection' };
   }
   if (!account || typeof subscription.id !== 'string') return { handled: false, type: event.type, reason: resolvedPlan.reason || 'subscription is not linked to a known account and plan' };
-  if (typeof subscription.customer === 'string' && !db.linkStripeCustomer(account.id, subscription.customer) && event.livemode) {
+  if (typeof subscription.customer === 'string' && !await db.linkStripeCustomer(account.id, subscription.customer) && event.livemode) {
     return { handled: false, type: event.type, reason: 'Stripe customer is linked to a different account' };
   }
   // A signed lifecycle event for a known subscription is authoritative even
@@ -650,17 +684,17 @@ function applySubscriptionEvent(event, db) {
   // closed: suspend every grant sourced from that subscription and restore it
   // only after a later lifecycle event maps to one exact supported Price.
   if (!plan) {
-    const first = db.recordBillingEvent({
+    const first = await db.recordBillingEvent({
       type: event.type, email: account.email, accountId: account.id, plan: null,
       livemode: event.livemode, stripe_ref: event.id, payload: billingPayload(event),
     });
     if (!first) return { handled: true, duplicate: true, plan: null, email: account.email };
-    if (db.isStaleEntitlementEvent(account.id, subscription.id, event.created)) {
+    if (await db.isStaleEntitlementEvent(account.id, subscription.id, event.created)) {
       return { handled: true, stale: true, plan: null, email: account.email, entitlementPolicy: 'fail-closed-unmapped-price' };
     }
-    const deactivated = db.deactivateEntitlementsBySource(account.id, subscription.id, 'inactive', event.created);
-    db.syncApiKeysForAccount(account.id);
-    db.syncAccountPlan(account.id);
+    const deactivated = await db.deactivateEntitlementsBySource(account.id, subscription.id, 'inactive', event.created);
+    await db.syncApiKeysForAccount(account.id);
+    await db.syncAccountPlan(account.id);
     return {
       handled: true, plan: null, email: account.email, entitlement: 'inactive', deactivated,
       unresolvedPlan: true, entitlementPolicy: 'fail-closed-unmapped-price',
@@ -668,12 +702,12 @@ function applySubscriptionEvent(event, db) {
   }
   const status = entitlementStatus(subscription.status, event.type === 'customer.subscription.deleted');
   const product = plan.kind === 'consumer' ? plan.grantsPlan : `api:${plan.tier}`;
-  const first = db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, plan: plan.id, livemode: event.livemode, stripe_ref: event.id, payload: billingPayload(event) });
+  const first = await db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, plan: plan.id, livemode: event.livemode, stripe_ref: event.id, payload: billingPayload(event) });
   if (!first) return { handled: true, duplicate: true, plan: plan.id, email: account.email };
-  if (db.isStaleEntitlementEvent(account.id, subscription.id, event.created)) {
+  if (await db.isStaleEntitlementEvent(account.id, subscription.id, event.created)) {
     return { handled: true, stale: true, plan: plan.id, email: account.email };
   }
-  const entitlement = db.upsertEntitlement({
+  const entitlement = await db.upsertEntitlement({
     accountId: account.id, product, status, sourceRef: subscription.id,
     currentPeriodEnd: Number.isInteger(subscription.current_period_end)
       ? new Date(subscription.current_period_end * 1000).toISOString()
@@ -683,28 +717,28 @@ function applySubscriptionEvent(event, db) {
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end), metadata: { plan: plan.id }, eventCreated: event.created,
   });
   if (!entitlement.applied) return { handled: true, stale: true, plan: plan.id, email: account.email, entitlement: entitlement.status };
-  db.retireOtherEntitlements(account.id, subscription.id, product, event.created);
-  if (plan.kind === 'api') db.syncApiKeysForAccount(account.id);
-  db.syncAccountPlan(account.id);
+  await db.retireOtherEntitlements(account.id, subscription.id, product, event.created);
+  if (plan.kind === 'api') await db.syncApiKeysForAccount(account.id);
+  await db.syncAccountPlan(account.id);
   return { handled: true, plan: plan.id, email: account.email, entitlement: status };
 }
 
-function applyInvoiceEvent(event, db) {
+async function applyInvoiceEvent(event, db) {
   const invoice = event.data?.object || {};
   // Empty or unrelated invoice events remain ignored for backward compatibility.
-  const account = accountForObject(invoice, db, { enforceCustomer: Boolean(event.livemode) });
+  const account = await accountForObject(invoice, db, { enforceCustomer: Boolean(event.livemode) });
   const resolvedPlan = resolvePlanFromObject(invoice, Boolean(event.livemode), { allowMultipleAudit: true });
   const plan = resolvedPlan.plan;
   const paid = ['invoice.paid', 'invoice.payment_succeeded'].includes(event.type);
   const failed = event.type === 'invoice.payment_failed';
-  const deleted = !account && db.getDeletedAccountForBilling({
+  const deleted = !account && await db.getDeletedAccountForBilling({
     accountId: invoice?.metadata?.account_id || invoice?.subscription_details?.metadata?.account_id || invoice?.parent?.subscription_details?.metadata?.account_id,
     customerId: invoice.customer,
   });
   if (deleted && typeof invoice.id === 'string' && (paid || failed)) {
-    const duplicatePayment = paid && db.hasRecognizedInvoicePayment(invoice.id);
+    const duplicatePayment = paid && await db.hasRecognizedInvoicePayment(invoice.id);
     const amount = paid && !duplicatePayment && Number.isInteger(invoice.amount_paid) ? invoice.amount_paid : 0;
-    const first = db.recordBillingEvent({
+    const first = await db.recordBillingEvent({
       type: event.type, plan: plan?.id || null, amount_cents: amount, currency: invoice.currency || 'usd',
       livemode: event.livemode, stripe_ref: event.id,
       payload: { objectId: invoice.id, status: 'post-deletion-invoice', eventCreated: Number.isInteger(event.created) ? event.created : null },
@@ -716,12 +750,12 @@ function applyInvoiceEvent(event, db) {
   // Stripe emits both invoice.payment_succeeded and invoice.paid for the same
   // successful invoice. Keep both lifecycle events, but recognize cash once
   // per immutable invoice object id.
-  const duplicatePayment = paid && db.hasRecognizedInvoicePayment(invoice.id);
+  const duplicatePayment = paid && await db.hasRecognizedInvoicePayment(invoice.id);
   const amount = paid && !duplicatePayment && Number.isInteger(invoice.amount_paid) ? invoice.amount_paid : 0;
-  if (typeof invoice.customer === 'string' && !db.linkStripeCustomer(account.id, invoice.customer) && event.livemode) {
+  if (typeof invoice.customer === 'string' && !await db.linkStripeCustomer(account.id, invoice.customer) && event.livemode) {
     return { handled: false, type: event.type, reason: 'Stripe customer is linked to a different account' };
   }
-  const first = db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, plan: plan?.id || null, amount_cents: amount, currency: invoice.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload: billingPayload(event) });
+  const first = await db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, plan: plan?.id || null, amount_cents: amount, currency: invoice.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload: billingPayload(event) });
   if (!first) return { handled: true, duplicate: true, plan: plan?.id || null, email: account.email };
   // Invoice events are cash/audit evidence, not subscription lifecycle
   // authority. In particular, a late invoice.paid must never resurrect a
@@ -740,31 +774,31 @@ function applyInvoiceEvent(event, db) {
   };
 }
 
-function applyRefundEvent(event, db) {
+async function applyRefundEvent(event, db) {
   const charge = event.data?.object || {};
-  const account = accountForObject(charge, db, { enforceCustomer: Boolean(event.livemode) });
+  const account = await accountForObject(charge, db, { enforceCustomer: Boolean(event.livemode) });
   if (typeof charge.id !== 'string') return { handled: false, type: event.type };
   if (!Number.isInteger(charge.amount_refunded) || charge.amount_refunded < 0) return { handled: false, type: event.type, reason: 'refund has no valid cumulative amount' };
-  const previous = db.refundedTotalForCharge(charge.id);
+  const previous = await db.refundedTotalForCharge(charge.id);
   const cumulative = Math.max(previous, charge.amount_refunded);
   const amount = -(cumulative - previous);
   const payload = { ...billingPayload(event), cumulativeRefunded: cumulative };
   if (!account) {
-    const deleted = db.getDeletedAccountForBilling({ accountId: charge?.metadata?.account_id, customerId: charge.customer });
+    const deleted = await db.getDeletedAccountForBilling({ accountId: charge?.metadata?.account_id, customerId: charge.customer });
     if (!deleted) return { handled: false, type: event.type };
-    const first = db.recordBillingEvent({ type: event.type, amount_cents: amount, currency: charge.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload: { ...payload, status: 'post-deletion-refund' } });
+    const first = await db.recordBillingEvent({ type: event.type, amount_cents: amount, currency: charge.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload: { ...payload, status: 'post-deletion-refund' } });
     return { handled: true, duplicate: !first, deletedAccount: true, auditOnly: true, amount_cents: amount, entitlementPolicy: 'no-resurrection' };
   }
-  const first = db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, amount_cents: amount, currency: charge.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload });
+  const first = await db.recordBillingEvent({ type: event.type, email: account.email, accountId: account.id, amount_cents: amount, currency: charge.currency || 'usd', livemode: event.livemode, stripe_ref: event.id, payload });
   return { handled: true, duplicate: !first, email: account.email, amount_cents: amount };
 }
 
-function applyRefundAuditEvent(event, db) {
+async function applyRefundAuditEvent(event, db) {
   const refund = event.data?.object || {};
   if (typeof refund.id !== 'string' || typeof refund.charge !== 'string') {
     return { handled: false, type: event.type, reason: 'refund lifecycle event is missing immutable identifiers' };
   }
-  const first = db.recordBillingEvent({
+  const first = await db.recordBillingEvent({
     type: event.type,
     amount_cents: 0,
     currency: refund.currency || 'usd',
@@ -775,29 +809,29 @@ function applyRefundAuditEvent(event, db) {
   return { handled: true, duplicate: !first, auditOnly: true, entitlementPolicy: 'unchanged' };
 }
 
-function applyDisputeEvent(event, db) {
+async function applyDisputeEvent(event, db) {
   const dispute = event.data?.object || {};
   if (typeof dispute.id !== 'string' || !Number.isInteger(dispute.amount) || dispute.amount < 0) {
     return { handled: false, type: event.type, reason: 'dispute event is missing a valid id or amount' };
   }
-  const account = accountForObject(dispute, db, { enforceCustomer: Boolean(event.livemode) });
-  const deleted = !account && db.getDeletedAccountForBilling({ accountId: dispute?.metadata?.account_id, customerId: dispute.customer });
+  const account = await accountForObject(dispute, db, { enforceCustomer: Boolean(event.livemode) });
+  const deleted = !account && await db.getDeletedAccountForBilling({ accountId: dispute?.metadata?.account_id, customerId: dispute.customer });
   if (!account && !deleted && event.livemode) return { handled: false, type: event.type, reason: 'dispute is not linked to a known or deleted account' };
   const types = [...DISPUTE_EVENTS];
-  const latest = db.latestBillingObjectEvent(dispute.id, types);
+  const latest = await db.latestBillingObjectEvent(dispute.id, types);
   const incomingCreated = Number.isInteger(event.created) ? event.created : null;
   const latestCreated = Number.isInteger(latest?.payload?.eventCreated) ? latest.payload.eventCreated : null;
   const priority = (type) => type === 'charge.dispute.closed' ? 3 : type === 'charge.dispute.updated' ? 2 : 1;
   const stale = latest && incomingCreated !== null && latestCreated !== null && (
     incomingCreated < latestCreated || (incomingCreated === latestCreated && priority(event.type) <= priority(latest.type))
   );
-  const currentImpact = db.billingObjectAmount(dispute.id, types);
+  const currentImpact = await db.billingObjectAmount(dispute.id, types);
   let desiredImpact = currentImpact;
   if (!stale && event.type === 'charge.dispute.created') desiredImpact = -dispute.amount;
   if (!stale && event.type === 'charge.dispute.closed' && dispute.status === 'won') desiredImpact = 0;
   if (!stale && event.type === 'charge.dispute.closed' && dispute.status === 'lost') desiredImpact = -dispute.amount;
   const amount = desiredImpact - currentImpact;
-  const first = db.recordBillingEvent({
+  const first = await db.recordBillingEvent({
     type: event.type,
     email: account?.email || null,
     accountId: account?.id || null,

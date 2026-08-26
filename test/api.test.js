@@ -18,8 +18,8 @@ const INDEX_HTML = path.join(import.meta.dirname, '..', 'public', 'index.html');
 
 const VEGAS_CONTEXT = { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500, mandatoryFeesIncluded: false, taxesIncluded: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Historical test fixture with mandatory lodging fees listed separately before the FTC rule.' };
 
-function startApp() {
-  const { server, db } = createApp({ dbPath: ':memory:' });
+async function startApp() {
+  const { server, db } = await createApp({ dbPath: ':memory:' });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
@@ -34,7 +34,7 @@ async function stopApp(app) {
     app.server.close(resolve);
     app.server.closeAllConnections(); // drop keep-alive sockets so close() returns
   });
-  app.db.close();
+  await app.db.close();
 }
 
 function postJson(base, route, body, headers = {}) {

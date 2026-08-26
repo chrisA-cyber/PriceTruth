@@ -191,6 +191,48 @@ describe('live source failure fails closed', () => {
     assert.equal(listing.source, 'live:retail-feed');
   });
 
+  it('accepts only public HTTPS retail endpoints in production while preserving local development feeds', () => {
+    assert.equal(retail.configured({
+      NODE_ENV: 'production', RETAIL_API_URL: 'https://feed.launch-operator.com/v1/search?market=us',
+    }), true);
+    assert.equal(retail.configured({ NODE_ENV: 'development', RETAIL_API_URL: 'http://127.0.0.1:4781/mock/search' }), true);
+    for (const url of [
+      'http://feed.launch-operator.com/v1/search',
+      'https://user:secret@feed.launch-operator.com/v1/search',
+      'https://feed.launch-operator.com/v1/search#fragment',
+      'https://127.0.0.1/v1/search',
+      'https://metadata.google.internal/computeMetadata/v1',
+    ]) assert.equal(retail.configured({ NODE_ENV: 'production', RETAIL_API_URL: url }), false, url);
+  });
+
+  it('rejects retail redirects without following or forwarding the bearer credential', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+      calls.push({ url: String(url), options });
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'http://169.254.169.254/latest/meta-data' },
+      });
+    };
+    await assert.rejects(
+      () => retail.live('real product', {
+        env: {
+          NODE_ENV: 'production',
+          RETAIL_API_URL: 'https://feed.launch-operator.com/v1/search?market=us',
+          RETAIL_API_KEY: 'top-secret-bearer',
+        },
+        fetchImpl,
+      }),
+      (error) => error.status === 502 && error.code === 'UPSTREAM_REDIRECT_REJECTED',
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.redirect, 'manual');
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer top-secret-bearer');
+    assert.match(calls[0].url, /^https:\/\/feed\.launch-operator\.com\/v1\/search\?/);
+    assert.match(calls[0].url, /market=us/);
+    assert.match(calls[0].url, /q=real\+product/);
+  });
+
   it('does not promise refreshes or alerts for an empty provider identity', async () => {
     process.env.RETAIL_API_URL = 'https://feed.example.com/search';
     globalThis.fetch = async () => new Response(

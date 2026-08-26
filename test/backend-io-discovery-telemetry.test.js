@@ -8,7 +8,7 @@ import { httpJson } from '../src/providers/http.js';
 import { signPayload } from '../src/billing.js';
 
 async function startApp() {
-  const created = createApp({ dbPath: ':memory:' });
+  const created = await createApp({ dbPath: ':memory:' });
   await new Promise((resolve, reject) => {
     created.server.once('error', reject);
     created.server.listen(0, '127.0.0.1', resolve);

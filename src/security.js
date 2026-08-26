@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 
 // Security middleware for the zero-dependency HTTP server: strict headers,
 // per-client token-bucket rate limiting, safe JSON body parsing, validators.
@@ -186,10 +187,32 @@ const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,24}$/;
 // deliberately not resolved here; deployment verification owns reachability.
 function isPublicHostname(value) {
   const host = String(value || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-  if (!host || !host.includes('.') || /^\d+(?:\.\d+){3}$/.test(host) || host.includes(':')) return false;
-  if (['localhost', 'test', 'example', 'invalid', 'local', 'internal', 'lan'].some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
+  if (!host || host.length > 253 || !host.includes('.') || isIP(host)) return false;
+  if (['localhost', 'test', 'example', 'invalid', 'local', 'internal', 'lan', 'localdomain', 'home.arpa', 'arpa', 'onion']
+    .some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
   if (['example.com', 'example.net', 'example.org'].some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
-  return /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host);
+  return host.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+// Strict boundary for production service URLs. It deliberately rejects all IP
+// literals (not only familiar private ranges), special-use/internal DNS names,
+// credentials, and fragments. Provider endpoints may carry a path and query;
+// canonical application origins use the narrower helper below.
+function isPublicHttpsUrl(value) {
+  const raw = String(value || '');
+  if (!raw || raw !== raw.trim()) return false;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' && !url.username && !url.password && isPublicHostname(url.hostname) && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHttpsOrigin(value) {
+  if (!isPublicHttpsUrl(value)) return false;
+  const url = new URL(value);
+  return (url.pathname === '' || url.pathname === '/') && !url.search;
 }
 
 const validate = {
@@ -282,4 +305,8 @@ function escapeHtml(s) {
     .replaceAll("'", '&#39;');
 }
 
-export { applySecurityHeaders, RateLimiter, HttpError, readJsonBody, readRawBody, validate, escapeHtml, parseCookies, serializeCookie, requestId, assertSameOrigin, isPublicHostname, CSP };
+export {
+  applySecurityHeaders, RateLimiter, HttpError, readJsonBody, readRawBody, validate, escapeHtml,
+  parseCookies, serializeCookie, requestId, assertSameOrigin,
+  isPublicHostname, isPublicHttpsUrl, isPublicHttpsOrigin, CSP,
+};

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
 
 const DEFAULT_PATH = path.join(import.meta.dirname, '..', 'data', 'pricetruth.db');
@@ -209,23 +210,122 @@ function wrap(raw, dbPath) {
   // SQLite driver cannot stall live HTTP and webhook handling.
   let readinessCache = null;
   let integrityChecks = 0;
-  let transactionDepth = 0;
-  const tx = (fn) => {
-    const nested = transactionDepth > 0;
-    const savepoint = `pt_nested_${transactionDepth}`;
-    raw.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
-    transactionDepth += 1;
+  const transactionScope = new AsyncLocalStorage();
+  const transactionQueue = [];
+  let topLevelTransactionActive = false;
+
+  const activeTransactionContext = () => {
+    let context = transactionScope.getStore();
+    while (context) {
+      if (context.raw === raw && context.active && context.root.active) return context;
+      context = context.parent;
+    }
+    return null;
+  };
+
+  const assertPublicMethodAccess = (method) => {
+    if (!topLevelTransactionActive || activeTransactionContext()) return;
+    const error = new Error(`SQLite connection is busy with an asynchronous transaction; retry ${method} after it settles`);
+    error.status = 503;
+    error.code = 'SQLITE_BUSY';
+    error.retryable = true;
+    throw error;
+  };
+
+  const drainTransactionQueue = () => {
+    if (topLevelTransactionActive || transactionQueue.length === 0) return;
+    const queued = transactionQueue.shift();
+    let result;
     try {
-      const value = fn();
-      transactionDepth -= 1;
-      raw.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
-      return value;
+      result = startTopLevelTransaction(queued.fn);
     } catch (error) {
-      transactionDepth -= 1;
-      if (nested) raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`);
-      else raw.exec('ROLLBACK');
+      queued.reject(error);
+      drainTransactionQueue();
+      return;
+    }
+    Promise.resolve(result).then(queued.resolve, queued.reject);
+  };
+
+  const releaseTopLevelTransaction = () => {
+    topLevelTransactionActive = false;
+    drainTransactionQueue();
+  };
+
+  const runStartedTransaction = (fn, parent = null, savepoint = null) => {
+    const context = {
+      raw,
+      parent,
+      root: parent?.root || null,
+      active: true,
+      nextSavepoint: 0,
+    };
+    if (!context.root) context.root = context;
+    const nested = Boolean(parent);
+    const finish = () => {
+      context.active = false;
+      if (!nested) releaseTopLevelTransaction();
+    };
+    const commit = (value) => {
+      try {
+        raw.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
+        return value;
+      } catch (error) {
+        try {
+          if (nested) raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`);
+          else raw.exec('ROLLBACK');
+        } catch { /* preserve the commit failure */ }
+        throw error;
+      } finally {
+        finish();
+      }
+    };
+    const rollback = (error) => {
+      try {
+        if (nested) raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`);
+        else raw.exec('ROLLBACK');
+      } finally {
+        finish();
+      }
+      throw error;
+    };
+
+    let value;
+    try {
+      value = transactionScope.run(context, fn);
+    } catch (error) {
+      return rollback(error);
+    }
+    // Preserve the historical synchronous return for synchronous callbacks,
+    // while keeping the SQLite transaction open for async shared-domain code.
+    if (value && typeof value.then === 'function') {
+      return Promise.resolve(value).then(commit, rollback);
+    }
+    return commit(value);
+  };
+
+  function startTopLevelTransaction(fn) {
+    topLevelTransactionActive = true;
+    try {
+      raw.exec('BEGIN IMMEDIATE');
+    } catch (error) {
+      releaseTopLevelTransaction();
       throw error;
     }
+    return runStartedTransaction(fn);
+  }
+
+  const tx = (fn) => {
+    if (typeof fn !== 'function') throw new TypeError('transaction callback must be a function');
+    const parent = activeTransactionContext();
+    if (parent) {
+      const savepoint = `pt_nested_${++parent.root.nextSavepoint}`;
+      raw.exec(`SAVEPOINT ${savepoint}`);
+      return runStartedTransaction(fn, parent, savepoint);
+    }
+    if (!topLevelTransactionActive && transactionQueue.length === 0) {
+      return startTopLevelTransaction(fn);
+    }
+    return new Promise((resolve, reject) => transactionQueue.push({ fn, resolve, reject }));
   };
   const since = (days) => nowIso(Date.now() - days * 86_400_000);
   const productRow = (row) => row ? { ...row, context: parseJson(row.context_json), evidence: parseJson(row.evidence_json) } : null;
@@ -278,6 +378,16 @@ function wrap(raw, dbPath) {
     raw,
     dbPath,
     transaction: tx,
+    // SQLite transactions share one guarded connection, so the transaction
+    // itself already serializes billing-object changes. Keep the same adapter
+    // contract as Postgres without adding a second lock primitive.
+    lockBillingObject(scope, objectId) {
+      const kind = String(scope || '');
+      const id = String(objectId || '');
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(kind)) throw new TypeError('billing lock scope is invalid');
+      if (!id || id.length > 512) throw new TypeError('billing lock object id must be 1..512 characters');
+      return true;
+    },
     schemaVersion: () => q('SELECT COALESCE(MAX(version),0) version FROM schema_migrations').get().version,
     checkReady({ force = false } = {}) {
       if (readinessCache && !force) return { ...readinessCache };
@@ -320,6 +430,17 @@ function wrap(raw, dbPath) {
     },
     getProduct(id) { return productRow(q('SELECT * FROM products WHERE id=?').get(id)); },
     listProducts() { return q('SELECT * FROM products ORDER BY created_at,id').all().map(productRow); },
+    repairDemoPricePoints(productId, { source, sourceLabel, certainty, evidenceJson }) {
+      return q(`UPDATE price_points SET source=?,source_label=?,certainty=?,observed=0,alert_eligible=0,evidence_json=? WHERE product_id=?`)
+        .run(source, sourceLabel, certainty, evidenceJson, productId).changes;
+    },
+    removeDemoProduct(productId) { return tx(() => {
+      api.cancelProductJobs(productId);
+      q('DELETE FROM alerts WHERE product_id=?').run(productId);
+      q('DELETE FROM watchlist WHERE product_id=?').run(productId);
+      q('DELETE FROM price_points WHERE product_id=?').run(productId);
+      return q('DELETE FROM products WHERE id=?').run(productId).changes;
+    }); },
     getVisibleProduct(id, accountId = null) { return productRow(q("SELECT * FROM products WHERE id=? AND (visibility='curated' OR owner_account_id=?)").get(id, accountId)); },
     getPublicProduct(id) { return productRow(q("SELECT * FROM products WHERE id=? AND visibility='curated'").get(id)); },
     listPublicProducts(limit = 20, offset = 0, verticals = null) {
@@ -647,7 +768,22 @@ function wrap(raw, dbPath) {
     close() { raw.close(); },
   };
 
-  return Object.assign(api, buildOperationalMethods({ raw, q, tx, api, accountById, accountByEmail, preferences, productRow, sealSecret, openSecret }));
+  Object.assign(api, buildOperationalMethods({ raw, q, tx, api, accountById, accountByEmail, preferences, productRow, sealSecret, openSecret }));
+  // DatabaseSync exposes one connection. While an async transaction is
+  // suspended, any unrelated statement on that connection would otherwise
+  // become part of the open transaction and could report success before a
+  // later rollback silently erased it. Public synchronous methods cannot wait
+  // without changing their API, so fail them fast with a retryable busy error.
+  // Calls made from the transaction's own async context remain available, and
+  // transaction() itself uses the FIFO queue above.
+  for (const [name, method] of Object.entries(api)) {
+    if (name === 'transaction' || typeof method !== 'function') continue;
+    api[name] = (...args) => {
+      assertPublicMethodAccess(name);
+      return method(...args);
+    };
+  }
+  return api;
 }
 
 // Operational methods are split from the core CRUD above to keep migrations
@@ -1184,13 +1320,20 @@ function buildOperationalMethods({ raw, q, tx, api, accountById, preferences, pr
       return tx(() => {
         const { ttlMs = 30 * 60_000, termsVersion = null } = typeof options === 'number' ? { ttlMs: options } : options;
         const now = nowIso(), cutoff = nowIso(Date.now() - ttlMs);
-        q("UPDATE checkout_intents SET status='expired',updated_at=? WHERE account_id=? AND plan=? AND status='pending' AND stripe_session_id IS NULL AND created_at<?").run(now, accountId, plan, cutoff);
+        q("UPDATE checkout_intents SET status='expired',updated_at=? WHERE account_id=? AND status='pending' AND stripe_session_id IS NULL AND created_at<?").run(now, accountId, cutoff);
         // Once Stripe has attached a session, local wall-clock expiry is not an
         // authoritative terminal signal. A delayed completed webhook could
         // represent a real subscription, so only a signed provider terminal
         // event may expire/fail the intent.
-        let intent = q("SELECT * FROM checkout_intents WHERE account_id=? AND plan=? AND status IN ('pending','awaiting_payment')").get(accountId, plan);
+        let intent = q("SELECT * FROM checkout_intents WHERE account_id=? AND status IN ('pending','awaiting_payment') ORDER BY created_at,id LIMIT 1").get(accountId);
         if (intent) {
+          if (intent.plan !== plan) {
+            const error = new Error('another checkout is already pending; finish or let it expire before choosing a different plan');
+            error.status = 409;
+            error.code = 'CHECKOUT_PENDING';
+            error.details = { pendingPlans: [intent.plan] };
+            throw error;
+          }
           if (termsVersion && intent.terms_version !== termsVersion) {
             q('UPDATE checkout_intents SET terms_version=?,updated_at=? WHERE id=?').run(termsVersion, now, intent.id);
             intent = q('SELECT * FROM checkout_intents WHERE id=?').get(intent.id);

@@ -35,7 +35,7 @@ describe('provider request budget', () => {
     process.env.RETAIL_API_URL = `${upstreamBase}/lookup`;
     process.env.PROVIDER_DAILY_BUDGET_RETAIL = '1';
 
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     const base = await listen(app.server);
     try {
       const first = await fetch(`${base}/api/search`, {

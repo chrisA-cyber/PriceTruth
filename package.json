@@ -25,14 +25,19 @@
     "deploy:verify": "node scripts/postdeploy-check.mjs",
     "db:backup": "node scripts/db-backup.mjs",
     "db:restore": "node scripts/db-restore.mjs",
+    "db:cutover": "node scripts/migrate-sqlite-to-netlify.mjs",
     "extension:icons": "node scripts/generate-extension-icons.mjs",
     "extension:check": "node scripts/validate-extension.mjs && node --test test/extension-adapters.test.js test/extension-package.test.js test/extzip.test.js",
     "extension:package": "node scripts/package-extension.mjs",
     "api:check": "node scripts/validate-openapi.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@netlify/database": "^2.0.0",
+    "@netlify/functions": "^6.0.0"
+  },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
+    "@netlify/database-dev": "^1.0.0",
     "@playwright/test": "1.62.1"
   }
 }

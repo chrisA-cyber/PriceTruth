@@ -5,11 +5,18 @@
 [build.environment]
   NODE_VERSION = "24"
 
-# PriceTruth's browser application is hosted by Netlify. Dynamic requests are
-# rewritten by the generated dist/netlify/_redirects file to the durable Node
-# backend named by PRICETRUTH_BACKEND_ORIGIN. The build deliberately fails when
-# that variable is missing; silently deploying a static shell would break price
-# checks, accounts, alerts, billing, and webhooks.
+# PriceTruth is a native Netlify application: the browser bundle is served from
+# the CDN and request-scoped Node functions own every dynamic route. Runtime
+# secrets belong in the Netlify UI/CLI/API, not this repository-backed file.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  included_files = ["extension/**", "openapi/openapi.json", "public/index.html"]
+
+[dev]
+  publish = "dist/netlify"
+  functions = "netlify/functions"
+  port = 4780
 
 [[headers]]
   for = "/*"

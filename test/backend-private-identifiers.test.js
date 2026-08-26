@@ -5,7 +5,7 @@ import http from 'node:http';
 import { createApp } from '../src/server.js';
 
 async function startApp() {
-  const created = createApp({ dbPath: ':memory:' });
+  const created = await createApp({ dbPath: ':memory:' });
   await new Promise((resolve, reject) => {
     created.server.once('error', reject);
     created.server.listen(0, '127.0.0.1', resolve);

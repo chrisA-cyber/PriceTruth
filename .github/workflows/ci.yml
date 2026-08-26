@@ -28,11 +28,16 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
-      - name: Build the fail-closed Netlify frontend bundle
+      - name: Build the native Netlify application bundle
         env:
-          PRICETRUTH_BACKEND_ORIGIN: https://backend.pricetruth.app
           PRICETRUTH_SITE_ORIGIN: https://pricetruth.netlify.app
         run: npm run build:netlify
+      - name: Package and verify the exact Netlify Function manifest
+        env:
+          PRICETRUTH_SITE_ORIGIN: https://pricetruth.netlify.app
+        run: |
+          npx --yes netlify-cli@27.4.0 build --offline
+          node scripts/verify-netlify-manifest.mjs
       - run: npm run smoke:security
       - run: npm run smoke:performance
       - name: Validate and package the browser extension

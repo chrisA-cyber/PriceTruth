@@ -173,9 +173,9 @@ describe('applyEvent', () => {
   beforeEach(() => { db = open(':memory:'); });
   afterEach(() => { db.close(); });
 
-  it('a consumer checkout grants premium and records revenue', () => {
+  it('a consumer checkout grants premium and records revenue', async () => {
     const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'buyer@x.com', sessionId: 'cs_1' });
-    const res = billing.applyEvent(ev, db);
+    const res = await billing.applyEvent(ev, db);
     assert.equal(res.handled, true);
     assert.equal(res.granted, 'premium');
     assert.equal(db.isPremium('buyer@x.com'), true);
@@ -184,9 +184,9 @@ describe('applyEvent', () => {
     assert.equal(rev.paid_events, 1);
   });
 
-  it('an API checkout mints a key, stages it for one-time reveal, and marks the account', () => {
+  it('an API checkout mints a key, stages it for one-time reveal, and marks the account', async () => {
     const ev = billing.mockCompletedEvent({ planId: 'api_starter', email: 'dev@x.com', sessionId: 'cs_api' });
-    const res = billing.applyEvent(ev, db);
+    const res = await billing.applyEvent(ev, db);
     assert.equal(res.apiKeyIssued, true);
     assert.equal(res.tier, 'starter');
     // Pending key is claimable exactly once.
@@ -199,21 +199,21 @@ describe('applyEvent', () => {
     assert.equal(db.getAccount('dev@x.com').plan, 'api');
   });
 
-  it('is idempotent: replaying the same event does not double-count revenue', () => {
+  it('is idempotent: replaying the same event does not double-count revenue', async () => {
     const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'buyer@x.com', sessionId: 'cs_2' });
-    billing.applyEvent(ev, db);
-    const replay = billing.applyEvent(ev, db); // replay (Stripe retries)
+    await billing.applyEvent(ev, db);
+    const replay = await billing.applyEvent(ev, db); // replay (Stripe retries)
     assert.equal(replay.duplicate, true);
     const rev = db.revenueSummary();
     assert.equal(rev.paid_events, 1);
     assert.equal(rev.gross_cents, 400);
   });
 
-  it('is idempotent for key issuance: replaying an API checkout does not mint a second key', () => {
+  it('is idempotent for key issuance: replaying an API checkout does not mint a second key', async () => {
     const ev = billing.mockCompletedEvent({ planId: 'api_starter', email: 'dev@x.com', sessionId: 'cs_dupkey' });
-    const first = billing.applyEvent(ev, db);
+    const first = await billing.applyEvent(ev, db);
     assert.equal(first.apiKeyIssued, true);
-    const replay = billing.applyEvent(ev, db);
+    const replay = await billing.applyEvent(ev, db);
     assert.equal(replay.duplicate, true);
     assert.notEqual(replay.apiKeyIssued, true);
     // Exactly one key exists for this purchase.
@@ -221,65 +221,65 @@ describe('applyEvent', () => {
     assert.equal(tiers.starter, 1);
   });
 
-  it('records the actual charged amount (amount_total), not the list price', () => {
+  it('records the actual charged amount (amount_total), not the list price', async () => {
     // A promo-code checkout charges less than the plan list price ($4.00).
     const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'promo@x.com', sessionId: 'cs_promo', amount_cents: 300 });
-    billing.applyEvent(ev, db);
+    await billing.applyEvent(ev, db);
     assert.equal(db.revenueSummary().gross_cents, 300);
   });
 
-  it('buying an API plan does NOT revoke an existing Premium entitlement', () => {
+  it('buying an API plan does NOT revoke an existing Premium entitlement', async () => {
     const premiumEv = billing.mockCompletedEvent({ planId: 'premium', email: 'both@x.com', sessionId: 'cs_p' });
-    billing.applyEvent(premiumEv, db);
+    await billing.applyEvent(premiumEv, db);
     assert.equal(db.isPremium('both@x.com'), true);
     // Same email later buys API Starter.
     const apiEv = billing.mockCompletedEvent({ planId: 'api_starter', email: 'both@x.com', sessionId: 'cs_a' });
-    billing.applyEvent(apiEv, db);
+    await billing.applyEvent(apiEv, db);
     // Premium survives, and the API key was still issued.
     assert.equal(db.isPremium('both@x.com'), true);
     assert.ok(db.takePendingKey('cs_a'));
   });
 
-  it('ignores non-checkout events', () => {
-    const res = billing.applyEvent({ id: 'evt_x', type: 'invoice.paid', data: { object: {} } }, db);
+  it('ignores non-checkout events', async () => {
+    const res = await billing.applyEvent({ id: 'evt_x', type: 'invoice.paid', data: { object: {} } }, db);
     assert.equal(res.handled, false);
   });
 
-  it('ignores informational invoice events without poisoning live reconciliation', () => {
+  it('ignores informational invoice events without poisoning live reconciliation', async () => {
     for (const type of ['invoice.created', 'invoice.finalized', 'invoice.updated', 'invoice.upcoming']) {
-      const result = billing.applyEvent({ id: `evt_${type}`, type, livemode: true, data: { object: {} } }, db);
+      const result = await billing.applyEvent({ id: `evt_${type}`, type, livemode: true, data: { object: {} } }, db);
       assert.equal(result.handled, true);
       assert.equal(result.ignored, true);
     }
     assert.equal(db.billingReconciliationMetrics().pending, 0);
   });
 
-  it('recognizes invoice cash once when paid and payment_succeeded both arrive', () => {
+  it('recognizes invoice cash once when paid and payment_succeeded both arrive', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('invoice@example.com').id);
     const object = {
       id: 'in_pair_1', customer: 'cus_pair_1', subscription: 'sub_pair_1', amount_paid: 400, currency: 'usd',
       metadata: { plan: 'premium', account_id: account.id },
     };
     db.linkStripeCustomer(account.id, object.customer);
-    const first = billing.applyEvent({ id: 'evt_invoice_succeeded', type: 'invoice.payment_succeeded', created: 10, livemode: false, data: { object } }, db);
-    const second = billing.applyEvent({ id: 'evt_invoice_paid', type: 'invoice.paid', created: 11, livemode: false, data: { object } }, db);
+    const first = await billing.applyEvent({ id: 'evt_invoice_succeeded', type: 'invoice.payment_succeeded', created: 10, livemode: false, data: { object } }, db);
+    const second = await billing.applyEvent({ id: 'evt_invoice_paid', type: 'invoice.paid', created: 11, livemode: false, data: { object } }, db);
     assert.equal(first.amount_cents, 400);
     assert.equal(second.amount_cents, 0);
     assert.equal(second.duplicatePayment, true);
     assert.equal(db.revenueSummary().gross_cents, 400);
   });
 
-  it('never lets a late paid invoice resurrect a canceled subscription grant', () => {
+  it('never lets a late paid invoice resurrect a canceled subscription grant', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('invoice-no-resurrection@example.com').id);
     db.linkStripeCustomer(account.id, 'cus_invoice_no_resurrection');
     db.upsertEntitlement({ accountId: account.id, product: 'premium', status: 'active', sourceRef: 'sub_invoice_no_resurrection', eventCreated: 10 });
-    const canceled = billing.applyEvent({
+    const canceled = await billing.applyEvent({
       id: 'evt_sub_canceled_before_invoice', type: 'customer.subscription.deleted', created: 20, livemode: false,
       data: { object: { id: 'sub_invoice_no_resurrection', customer: 'cus_invoice_no_resurrection', status: 'canceled', metadata: { plan: 'premium', account_id: account.id } } },
     }, db);
     assert.equal(canceled.entitlement, 'canceled');
 
-    const invoice = billing.applyEvent({
+    const invoice = await billing.applyEvent({
       id: 'evt_invoice_late_paid', type: 'invoice.paid', created: 30, livemode: false,
       data: { object: {
         id: 'in_late_paid', customer: 'cus_invoice_no_resurrection', subscription: 'sub_invoice_no_resurrection',
@@ -291,7 +291,7 @@ describe('applyEvent', () => {
     assert.equal(db.isPremium(account.id), false);
   });
 
-  it('deauthorizes a known subscription that moves to an unmapped live Price', () => {
+  it('deauthorizes a known subscription that moves to an unmapped live Price', async () => {
     const savedPrice = process.env.STRIPE_PRICE_API_PRO;
     process.env.STRIPE_PRICE_API_PRO = 'price_supported_pro';
     try {
@@ -302,7 +302,7 @@ describe('applyEvent', () => {
       const rawKey = db.createApiKey('legacy pro key', 'pro', { ownerEmail: account.email, ownerAccountId: account.id, stripeRef: 'sub_legacy_price' });
       assert.ok(db.findApiKey(rawKey));
 
-      const result = billing.applyEvent({
+      const result = await billing.applyEvent({
         id: 'evt_unknown_live_price', type: 'customer.subscription.updated', created: 20, livemode: true,
         data: { object: {
           id: 'sub_legacy_price', customer: 'cus_legacy_price', status: 'active', metadata: { account_id: account.id },
@@ -321,13 +321,13 @@ describe('applyEvent', () => {
     }
   });
 
-  it('persists an unmapped subscription watermark even before any grant exists', () => {
+  it('persists an unmapped subscription watermark even before any grant exists', async () => {
     const savedPrice = process.env.STRIPE_PRICE_API_PRO;
     process.env.STRIPE_PRICE_API_PRO = 'price_supported_watermark_pro';
     try {
       const account = db.verifyAccount(db.getOrCreateAccount('watermark-price@example.com').id);
       db.linkStripeCustomer(account.id, 'cus_watermark_price');
-      const unknown = billing.applyEvent({
+      const unknown = await billing.applyEvent({
         id: 'evt_unknown_price_first', type: 'customer.subscription.updated', created: 200, livemode: true,
         data: { object: {
           id: 'sub_watermark_price', customer: 'cus_watermark_price', status: 'active', metadata: { account_id: account.id },
@@ -337,7 +337,7 @@ describe('applyEvent', () => {
       assert.equal(unknown.handled, true);
       assert.deepEqual(unknown.deactivated, []);
 
-      const delayedKnown = billing.applyEvent({
+      const delayedKnown = await billing.applyEvent({
         id: 'evt_supported_price_delayed', type: 'customer.subscription.updated', created: 100, livemode: true,
         data: { object: {
           id: 'sub_watermark_price', customer: 'cus_watermark_price', status: 'active', metadata: { account_id: account.id },
@@ -354,27 +354,27 @@ describe('applyEvent', () => {
     }
   });
 
-  it('books cumulative charge refunds as deltas and keeps replays idempotent', () => {
+  it('books cumulative charge refunds as deltas and keeps replays idempotent', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('refund@example.com').id);
     db.linkStripeCustomer(account.id, 'cus_refund_1');
     const make = (id, amount) => ({
       id, type: 'charge.refunded', livemode: false,
       data: { object: { id: 'ch_refund_1', customer: 'cus_refund_1', amount_refunded: amount, currency: 'usd', metadata: { account_id: account.id } } },
     });
-    assert.equal(billing.applyEvent(make('evt_refund_1000', 1000), db).amount_cents, -1000);
-    assert.equal(billing.applyEvent(make('evt_refund_1500', 1500), db).amount_cents, -500);
-    assert.equal(billing.applyEvent(make('evt_refund_1500', 1500), db).duplicate, true);
+    assert.equal((await billing.applyEvent(make('evt_refund_1000', 1000), db)).amount_cents, -1000);
+    assert.equal((await billing.applyEvent(make('evt_refund_1500', 1500), db)).amount_cents, -500);
+    assert.equal((await billing.applyEvent(make('evt_refund_1500', 1500), db)).duplicate, true);
     assert.equal(db.revenueSummary().refunds_cents, 1500);
     assert.equal(db.revenueSummary().net_cents, -1500);
   });
 
-  it('audits a late live refund without recreating an erased account from mutable email metadata', () => {
+  it('audits a late live refund without recreating an erased account from mutable email metadata', async () => {
     const email = 'erased-refund@example.com';
     const account = db.verifyAccount(db.getOrCreateAccount(email).id);
     assert.equal(db.linkStripeCustomer(account.id, 'cus_erased_refund'), true);
     assert.equal(db.deleteAccount(account.id), true);
 
-    const result = billing.applyEvent({
+    const result = await billing.applyEvent({
       id: 'evt_erased_refund', type: 'charge.refunded', livemode: true,
       data: { object: {
         id: 'ch_erased_refund', customer: 'cus_erased_refund', amount_refunded: 400, currency: 'usd',
@@ -393,7 +393,7 @@ describe('applyEvent', () => {
     assert.equal(db.billingReconciliationMetrics().pending, 0);
   });
 
-  it('reconciles premium alerts transactionally when a subscription is canceled', () => {
+  it('reconciles premium alerts transactionally when a subscription is canceled', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('downgrade-alerts@example.com').id);
     db.linkStripeCustomer(account.id, 'cus_downgrade_alerts');
     db.upsertProduct({ id: 'p-downgrade', vertical: 'subscription', name: 'Downgrade plan', advertised_cents: 1000 });
@@ -417,7 +417,7 @@ describe('applyEvent', () => {
       metadata: {}, idempotencyKey: 'queued-weekly-digest',
     });
 
-    const result = billing.applyEvent({
+    const result = await billing.applyEvent({
       id: 'evt_downgrade_alerts', type: 'customer.subscription.deleted', created: 2, livemode: false,
       data: { object: {
         id: 'sub_downgrade_alerts', customer: 'cus_downgrade_alerts', status: 'canceled',
@@ -444,39 +444,39 @@ describe('applyEvent', () => {
     );
   });
 
-  it('audits dispute withdrawal and reinstatement without automating entitlements', () => {
+  it('audits dispute withdrawal and reinstatement without automating entitlements', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('dispute@example.com').id);
     db.linkStripeCustomer(account.id, 'cus_dispute_1');
     const base = { id: 'dp_1', customer: 'cus_dispute_1', amount: 700, currency: 'usd', metadata: { account_id: account.id } };
-    const opened = billing.applyEvent({ id: 'evt_dispute_open', type: 'charge.dispute.created', livemode: false, data: { object: { ...base, status: 'needs_response' } } }, db);
-    const won = billing.applyEvent({ id: 'evt_dispute_won', type: 'charge.dispute.closed', livemode: false, data: { object: { ...base, status: 'won' } } }, db);
+    const opened = await billing.applyEvent({ id: 'evt_dispute_open', type: 'charge.dispute.created', livemode: false, data: { object: { ...base, status: 'needs_response' } } }, db);
+    const won = await billing.applyEvent({ id: 'evt_dispute_won', type: 'charge.dispute.closed', livemode: false, data: { object: { ...base, status: 'won' } } }, db);
     assert.equal(opened.amount_cents, -700);
     assert.equal(won.amount_cents, 700);
     assert.equal(won.entitlementPolicy, 'unchanged-pending-operator-review');
     assert.equal(db.revenueSummary().net_cents, 0);
   });
 
-  it('does not let an out-of-order dispute-created event regress a later won state', () => {
+  it('does not let an out-of-order dispute-created event regress a later won state', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('ordered-dispute@example.com').id);
     db.linkStripeCustomer(account.id, 'cus_dispute_ordered');
     const object = { id: 'dp_ordered', customer: 'cus_dispute_ordered', amount: 900, currency: 'usd', metadata: { account_id: account.id } };
-    const won = billing.applyEvent({ id: 'evt_dispute_won_new', type: 'charge.dispute.closed', created: 200, livemode: false, data: { object: { ...object, status: 'won' } } }, db);
-    const stale = billing.applyEvent({ id: 'evt_dispute_open_old', type: 'charge.dispute.created', created: 100, livemode: false, data: { object: { ...object, status: 'needs_response' } } }, db);
+    const won = await billing.applyEvent({ id: 'evt_dispute_won_new', type: 'charge.dispute.closed', created: 200, livemode: false, data: { object: { ...object, status: 'won' } } }, db);
+    const stale = await billing.applyEvent({ id: 'evt_dispute_open_old', type: 'charge.dispute.created', created: 100, livemode: false, data: { object: { ...object, status: 'needs_response' } } }, db);
     assert.equal(won.amount_cents, 0);
     assert.equal(stale.stale, true);
     assert.equal(stale.amount_cents, 0);
     assert.equal(db.revenueSummary().net_cents, 0);
   });
 
-  it('audits late subscription and invoice events after erasure without resurrecting the account', () => {
+  it('audits late subscription and invoice events after erasure without resurrecting the account', async () => {
     const account = db.verifyAccount(db.getOrCreateAccount('erased-billing@example.com').id);
     assert.equal(db.linkStripeCustomer(account.id, 'cus_erased_lifecycle'), true);
     assert.equal(db.deleteAccount(account.id), true);
-    const subscription = billing.applyEvent({
+    const subscription = await billing.applyEvent({
       id: 'evt_erased_subscription', type: 'customer.subscription.deleted', created: 300, livemode: true,
       data: { object: { id: 'sub_erased_lifecycle', customer: 'cus_erased_lifecycle', status: 'canceled', metadata: { account_id: account.id } } },
     }, db);
-    const invoice = billing.applyEvent({
+    const invoice = await billing.applyEvent({
       id: 'evt_erased_invoice', type: 'invoice.paid', created: 301, livemode: true,
       data: { object: { id: 'in_erased_lifecycle', customer: 'cus_erased_lifecycle', amount_paid: 400, currency: 'usd', metadata: { account_id: account.id } } },
     }, db);
@@ -488,11 +488,11 @@ describe('applyEvent', () => {
     assert.equal(db.billingReconciliationMetrics().pending, 0);
   });
 
-  it('ignores a checkout for an unknown plan', () => {
+  it('ignores a checkout for an unknown plan', async () => {
     const ev = billing.mockCompletedEvent({ planId: 'premium', email: 'x@y.com', sessionId: 'cs_3' });
     ev.data.object.metadata.plan = 'ghost';
     ev.data.object.client_reference_id = 'ghost';
-    const res = billing.applyEvent(ev, db);
+    const res = await billing.applyEvent(ev, db);
     assert.equal(res.handled, false);
   });
 });

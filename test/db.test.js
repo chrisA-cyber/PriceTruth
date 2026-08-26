@@ -242,6 +242,30 @@ describe('account erasure removes user-supplied API metadata and terms records',
 });
 
 describe('checkout intent provider authority', () => {
+  it('keeps one account from reserving two different plans concurrently', async () => {
+    const db = open(':memory:');
+    try {
+      const account = db.verifyAccount(db.getOrCreateAccount('cross-plan-sqlite@example.test').id);
+      const results = await Promise.allSettled([
+        db.transaction(async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return db.reserveCheckoutIntent(account.id, 'premium');
+        }),
+        db.transaction(async () => db.reserveCheckoutIntent(account.id, 'api_pro')),
+      ]);
+      assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+      assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+      const rejection = results.find((result) => result.status === 'rejected').reason;
+      assert.equal(rejection.status, 409);
+      assert.equal(rejection.code, 'CHECKOUT_PENDING');
+      const pending = db.listPendingCheckoutIntents(account.id);
+      assert.equal(pending.length, 1);
+      assert.deepEqual(rejection.details, { pendingPlans: [pending[0].plan] });
+      assert.equal(db.reserveCheckoutIntent(account.id, pending[0].plan).id, pending[0].id,
+        'the winning plan remains idempotently reusable');
+    } finally { db.close(); }
+  });
+
   it('keeps an attached Stripe session blocking and idempotent after nominal expiry', () => {
     const db = open(':memory:');
     try {

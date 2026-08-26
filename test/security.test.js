@@ -4,7 +4,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { RateLimiter, HttpError, validate, escapeHtml, isPublicHostname } from '../src/security.js';
+import {
+  RateLimiter, HttpError, validate, escapeHtml,
+  isPublicHostname, isPublicHttpsUrl, isPublicHttpsOrigin,
+} from '../src/security.js';
 
 // Every validator failure must be an HttpError with status 400 so the server
 // maps it straight to a client error.
@@ -29,9 +32,29 @@ describe('HttpError', () => {
 describe('production public-host boundary', () => {
   it('accepts DNS-shaped public hosts and rejects literals, internal names, and placeholders', () => {
     assert.equal(isPublicHostname('app.launch-operator.com'), true);
-    for (const host of ['localhost', '127.0.0.1', '::1', 'service.internal', 'deployment.example.invalid', 'example.com', 'sub.example.org', 'preview.test']) {
+    for (const host of [
+      'localhost', '127.0.0.1', '::1', 'service.internal', 'router.home.arpa', 'site.onion', 'service.localdomain',
+      'deployment.example.invalid', 'example.com', 'sub.example.org', 'preview.test', 'bad..launch-operator.com',
+    ]) {
       assert.equal(isPublicHostname(host), false, host);
     }
+  });
+
+  it('distinguishes public HTTPS endpoints from origin-only public URLs', () => {
+    const endpoint = 'https://feed.launch-operator.com/v1/search?market=us';
+    assert.equal(isPublicHttpsUrl(endpoint), true);
+    assert.equal(isPublicHttpsOrigin(endpoint), false);
+    assert.equal(isPublicHttpsOrigin('https://app.launch-operator.com/'), true);
+    for (const value of [
+      'http://feed.launch-operator.com/v1/search',
+      'https://user:secret@feed.launch-operator.com/v1/search',
+      'https://feed.launch-operator.com/v1/search#token',
+      'https://localhost/v1/search',
+      'https://127.0.0.1/v1/search',
+      'https://2130706433/v1/search',
+      'https://[::1]/v1/search',
+      'https://metadata.google.internal/computeMetadata/v1',
+    ]) assert.equal(isPublicHttpsUrl(value), false, value);
   });
 });
 

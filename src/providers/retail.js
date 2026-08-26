@@ -3,22 +3,43 @@
 // supplied. The illustrative helper below is never returned by public search.
 
 import { httpJson, hashStr, bandCents, titleize } from './http.js';
+import { isPublicHttpsUrl } from '../security.js';
 
 export const vertical = 'retail';
 
-export function configured() {
-  return Boolean(process.env.RETAIL_API_URL);
+function endpoint(env = process.env) {
+  const raw = String(env.RETAIL_API_URL || '');
+  if (!raw || raw !== raw.trim()) return null;
+  if (env.NODE_ENV === 'production') return isPublicHttpsUrl(raw) ? new URL(raw) : null;
+  try {
+    const url = new URL(raw);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url : null;
+  } catch {
+    return null;
+  }
 }
 
-// Optional generic client: GET RETAIL_API_URL?q=... expected to return JSON
+export function configured(env = process.env) {
+  return endpoint(env) !== null;
+}
+
+// Optional generic client: GET RETAIL_API_URL?q=... expected to return JSON.
+// Production accepts only a public HTTPS endpoint without credentials and rejects all
+// redirects so an Authorization bearer can never be forwarded to another host.
 // { name, url?, price_cents, currency?, shipping_cents?, handling_cents?,
 //   handling_included?, mandatory_extras_included?, taxPct? }.
-export async function live(q) {
-  const base = process.env.RETAIL_API_URL;
-  const url = `${base}${base.includes('?') ? '&' : '?'}q=${encodeURIComponent(q)}`;
+export async function live(q, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
+  const url = endpoint(env);
+  if (!url) {
+    const err = new Error('retail production source is not safely configured');
+    err.status = 503;
+    err.code = 'RETAIL_SOURCE_CONFIGURATION';
+    throw err;
+  }
+  url.searchParams.set('q', q);
   const headers = {};
-  if (process.env.RETAIL_API_KEY) headers.Authorization = `Bearer ${process.env.RETAIL_API_KEY}`;
-  const data = await httpJson(url, { headers, timeoutMs: 6000 });
+  if (env.RETAIL_API_KEY) headers.Authorization = `Bearer ${env.RETAIL_API_KEY}`;
+  const data = await httpJson(url, { headers, timeoutMs: 6000, redirect: 'manual', fetchImpl });
   // Validate magnitudes, not just types: an out-of-range feed value must become
   // a safe source failure (the registry catches this throw), never crash the
   // pricing engine with a 500. Bounds mirror the engine's integer-cents cap.

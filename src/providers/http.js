@@ -8,11 +8,20 @@ export async function httpJson(url, {
   body,
   timeoutMs = 6000,
   maxResponseBytes = Number(process.env.PROVIDER_RESPONSE_LIMIT_BYTES) || 1024 * 1024,
+  redirect = 'follow',
+  fetchImpl = globalThis.fetch,
 } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { method, headers, body, signal: ctrl.signal });
+    const res = await fetchImpl(url, { method, headers, body, redirect, signal: ctrl.signal });
+    if (redirect === 'manual' && res.status >= 300 && res.status < 400) {
+      try { await res.body?.cancel?.(); } catch { /* best-effort connection cleanup */ }
+      const error = new Error(`redirect rejected from ${safeHost(url)}`);
+      error.status = 502;
+      error.code = 'UPSTREAM_REDIRECT_REJECTED';
+      throw error;
+    }
     const text = await limitedResponseText(res, maxResponseBytes, url);
     let json = null;
     if (text) {

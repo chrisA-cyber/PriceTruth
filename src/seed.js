@@ -76,11 +76,11 @@ function hashSeed(id) {
   return h >>> 0;
 }
 
-function seed(db) {
+async function seed(db) {
   for (const p of DEMO_PRODUCTS) {
     const source = p.source || 'demo:seed';
     const sourceLabel = p.sourceLabel || 'Synthetic seeded demonstration; not a current offer';
-    db.upsertProduct({
+    await db.upsertProduct({
       ...p,
       source,
       sourceLabel,
@@ -97,9 +97,15 @@ function seed(db) {
     });
     // Repair older developer databases whose reserved demo points predate the
     // provenance columns. These ids are removed entirely in non-demo production.
-    db.raw.prepare(`UPDATE price_points SET source=?,source_label=?,certainty=?,observed=0,alert_eligible=0,evidence_json=? WHERE product_id=?`)
-      .run(source, sourceLabel, p.certainty || 'estimated', pointProvenance, p.id);
-    const existing = db.getLatestPoint(p.id, { eligibleOnly: false });
+    if (typeof db.repairDemoPricePoints === 'function') {
+      await db.repairDemoPricePoints(p.id, {
+        source, sourceLabel, certainty: p.certainty || 'estimated', evidenceJson: pointProvenance,
+      });
+    } else if (db.raw?.prepare) {
+      db.raw.prepare(`UPDATE price_points SET source=?,source_label=?,certainty=?,observed=0,alert_eligible=0,evidence_json=? WHERE product_id=?`)
+        .run(source, sourceLabel, p.certainty || 'estimated', pointProvenance, p.id);
+    }
+    const existing = await db.getLatestPoint(p.id, { eligibleOnly: false });
     if (existing) continue; // idempotent: don't duplicate history on re-run
 
     const rand = lcg(hashSeed(p.id));
@@ -118,7 +124,7 @@ function seed(db) {
 
     for (const pt of points) {
       const ts = new Date(Date.now() - pt.day * 86_400_000).toISOString();
-      db.addPricePoint(p.id, {
+      await db.addPricePoint(p.id, {
         ts,
         advertised_cents: pt.advertised_cents,
         true_cents: Math.round(pt.advertised_cents * ratio),
@@ -133,10 +139,14 @@ function seed(db) {
   }
 }
 
-function removeDemoSeed(db) {
+async function removeDemoSeed(db) {
   let removed = 0;
   for (const product of DEMO_PRODUCTS) {
-    db.cancelProductJobs?.(product.id);
+    if (typeof db.removeDemoProduct === 'function') {
+      removed += Number(await db.removeDemoProduct(product.id)) || 0;
+      continue;
+    }
+    await db.cancelProductJobs?.(product.id);
     db.raw.prepare('DELETE FROM alerts WHERE product_id=?').run(product.id);
     db.raw.prepare('DELETE FROM watchlist WHERE product_id=?').run(product.id);
     db.raw.prepare('DELETE FROM price_points WHERE product_id=?').run(product.id);
@@ -145,7 +155,7 @@ function removeDemoSeed(db) {
   return removed;
 }
 
-function seedSubscriptionCatalog(db) {
+async function seedSubscriptionCatalog(db) {
   const now = new Date().toISOString();
   let inserted = 0;
   for (const entry of subscriptions.catalog()) {
@@ -169,7 +179,7 @@ function seedSubscriptionCatalog(db) {
       stale,
       alertEligible,
     };
-    db.upsertProduct({
+    await db.upsertProduct({
       id,
       vertical: 'subscription',
       name: listing.name,
@@ -191,9 +201,9 @@ function seedSubscriptionCatalog(db) {
       visibility: 'curated',
     });
     const report = analyze({ vertical: 'subscription', advertised_cents: listing.advertised_cents, context: listing.context, baseCertainty: 'catalog' });
-    const latest = db.getLatestPoint(id, { eligibleOnly: false });
+    const latest = await db.getLatestPoint(id, { eligibleOnly: false });
     if (!latest || latest.evidence?.provenance?.asOf !== asOf || latest.true_cents !== report.truePrice.amount_cents) {
-      db.addPricePoint(id, {
+      await db.addPricePoint(id, {
         ts: asOf,
         advertised_cents: listing.advertised_cents,
         true_cents: report.truePrice.amount_cents,
@@ -214,12 +224,12 @@ function seedSubscriptionCatalog(db) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = open();
-  seed(db);
-  const demoKey = db.createApiKey('local demo key', 'starter');
+  await seed(db);
+  const demoKey = await db.createApiKey('local demo key', 'starter');
   console.log(`Seeded ${DEMO_PRODUCTS.length} demo products with 90 days of history.`);
   console.log('B2B demo API key (shown once, store it now):');
   console.log(`  ${demoKey}`);
-  db.close();
+  await db.close();
 }
 
 export { seed, seedSubscriptionCatalog, removeDemoSeed, DEMO_PRODUCTS };

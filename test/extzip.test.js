@@ -99,8 +99,8 @@ describe('extzip: zip()', () => {
 describe('extzip: /download/extension.zip route', () => {
   let app;
 
-  function startApp() {
-    const { server, db } = createApp({ dbPath: ':memory:' });
+  async function startApp() {
+    const { server, db } = await createApp({ dbPath: ':memory:' });
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => {
@@ -113,7 +113,7 @@ describe('extzip: /download/extension.zip route', () => {
   after(async () => {
     if (!app) return;
     await new Promise((r) => { app.server.close(r); app.server.closeAllConnections(); });
-    app.db.close();
+    await app.db.close();
   });
 
   it('serves a valid zip with attachment headers', async () => {

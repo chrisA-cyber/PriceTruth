@@ -6,7 +6,7 @@ import { open } from '../src/db.js';
 import { seed, seedSubscriptionCatalog } from '../src/seed.js';
 
 describe('production catalog bootstrap', () => {
-  it('rejects stray Stripe webhook configuration when live billing is disabled', () => {
+  it('rejects stray Stripe webhook configuration when live billing is disabled', async () => {
     const config = {
       NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://catalog.launch-operator.com',
       LAUNCH_VERTICALS: 'subscription', ENABLE_ACCOUNTS: '0', ENABLE_LIVE_BILLING: '0',
@@ -17,13 +17,13 @@ describe('production catalog bootstrap', () => {
     try {
       for (const [name, value] of Object.entries(config)) process.env[name] = value;
       delete process.env.STRIPE_SECRET_KEY;
-      assert.throws(() => createApp({ dbPath: ':memory:' }), /launch configuration is incomplete/);
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /launch configuration is incomplete/);
     } finally {
       for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value;
     }
   });
 
-  it('rejects a loopback HTTP canonical origin in production', () => {
+  it('rejects a loopback HTTP canonical origin in production', async () => {
     const config = {
       NODE_ENV: 'production', PUBLIC_BASE_URL: 'http://localhost:4780',
       LAUNCH_VERTICALS: 'subscription', ENABLE_ACCOUNTS: '0', ENABLE_LIVE_BILLING: '0',
@@ -32,13 +32,13 @@ describe('production catalog bootstrap', () => {
     const saved = Object.fromEntries(Object.keys(config).map((name) => [name, process.env[name]]));
     try {
       for (const [name, value] of Object.entries(config)) process.env[name] = value;
-      assert.throws(() => createApp({ dbPath: ':memory:' }), /canonicalPublicBaseUrl/);
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /canonicalPublicBaseUrl/);
     } finally {
       for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value;
     }
   });
 
-  it('fails startup when a declared production catalog has an invalid freshness policy even without billing', () => {
+  it('fails startup when a declared production catalog has an invalid freshness policy even without billing', async () => {
     const config = {
       NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://catalog.launch-operator.com',
       LAUNCH_VERTICALS: 'subscription', ENABLE_ACCOUNTS: '0', ENABLE_LIVE_BILLING: '0',
@@ -47,18 +47,38 @@ describe('production catalog bootstrap', () => {
     const saved = Object.fromEntries(Object.keys(config).map((name) => [name, process.env[name]]));
     try {
       for (const [name, value] of Object.entries(config)) process.env[name] = value;
-      assert.throws(() => createApp({ dbPath: ':memory:' }), /subscriptionCatalogFreshness|launchVerticals/);
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /subscriptionCatalogFreshness|launchVerticals/);
     } finally {
       for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value;
     }
   });
 
-  it('repairs provenance on reserved legacy demo rows without duplicating history', () => {
+  it('rejects a private retail endpoint at runtime while accepting a public endpoint path and query', async () => {
+    const config = {
+      NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://catalog.launch-operator.com',
+      LAUNCH_VERTICALS: 'retail', ENABLE_ACCOUNTS: '0', ENABLE_LIVE_BILLING: '0',
+      ENABLE_DEMO_SEED: '0', DISABLE_WORKER: '1', RETAIL_API_KEY: 'retail-secret',
+      RETAIL_API_URL: 'https://127.0.0.1/v1/search',
+    };
+    const saved = Object.fromEntries(Object.keys(config).map((name) => [name, process.env[name]]));
+    try {
+      for (const [name, value] of Object.entries(config)) process.env[name] = value;
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /launchVerticals/);
+
+      process.env.RETAIL_API_URL = 'https://feed.launch-operator.com/v1/search?market=us';
+      const app = await createApp({ dbPath: ':memory:' });
+      await app.db.close();
+    } finally {
+      for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value;
+    }
+  });
+
+  it('repairs provenance on reserved legacy demo rows without duplicating history', async () => {
     const db = open(':memory:');
     try {
       db.upsertProduct({ id: 'lcc-flight', vertical: 'flight', name: 'Legacy demo', advertised_cents: 18900, context: {} });
       db.addPricePoint('lcc-flight', { ts: '2026-08-01T00:00:00.000Z', advertised_cents: 18900, true_cents: 18900 });
-      seed(db);
+      await seed(db);
       const product = db.getProduct('lcc-flight');
       const point = db.getLatestPoint('lcc-flight', { eligibleOnly: false });
       assert.equal(product.evidence.provenance.demo, true);
@@ -68,7 +88,7 @@ describe('production catalog bootstrap', () => {
     } finally { db.close(); }
   });
 
-  it('reports only the production safety gates that are actually enabled', () => {
+  it('reports only the production safety gates that are actually enabled', async () => {
     const names = [
       'NODE_ENV', 'PUBLIC_BASE_URL', 'LAUNCH_VERTICALS', 'ENABLE_ACCOUNTS',
       'ENABLE_LIVE_BILLING', 'STRIPE_SECRET_KEY', 'ADMIN_TOKEN', 'REQUIRE_EMAIL',
@@ -80,7 +100,7 @@ describe('production catalog bootstrap', () => {
     process.env.ENABLE_LIVE_BILLING = '0';
     for (const name of ['PUBLIC_BASE_URL', 'STRIPE_SECRET_KEY', 'ADMIN_TOKEN', 'REQUIRE_EMAIL']) delete process.env[name];
     try {
-      assert.throws(
+      await assert.rejects(
         () => createApp({ dbPath: ':memory:' }),
         (error) => {
           assert.match(error.message, /canonicalPublicBaseUrl/);
@@ -89,7 +109,7 @@ describe('production catalog bootstrap', () => {
         },
       );
       process.env.PUBLIC_BASE_URL = 'https://deployment.example.invalid';
-      assert.throws(() => createApp({ dbPath: ':memory:' }), /canonicalPublicBaseUrl/);
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /canonicalPublicBaseUrl/);
     } finally {
       for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name];
@@ -114,7 +134,7 @@ describe('production catalog bootstrap', () => {
     const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     for (const [name, value] of Object.entries(config)) process.env[name] = value;
     for (const name of ['STRIPE_SECRET_KEY', 'ADMIN_TOKEN', 'REQUIRE_EMAIL', 'PRICETRUTH_DB']) delete process.env[name];
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     await new Promise((resolve, reject) => {
       app.server.once('error', reject);
       app.server.listen(0, '127.0.0.1', resolve);
@@ -132,7 +152,7 @@ describe('production catalog bootstrap', () => {
         assert.equal(product.evidence.provenance.alertEligible, true);
         assert.ok(app.db.getLatestPoint(product.id)?.alertEligible);
       }
-      assert.equal(seedSubscriptionCatalog(app.db), 0, 'catalog bootstrap is idempotent at the same as-of version');
+      assert.equal(await seedSubscriptionCatalog(app.db), 0, 'catalog bootstrap is idempotent at the same as-of version');
       assert.equal(app.db.raw.prepare('SELECT COUNT(*) n FROM price_points').get().n, 4);
 
       const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/products`);
@@ -184,7 +204,7 @@ describe('production catalog bootstrap', () => {
         app.server.close(resolve);
         app.server.closeAllConnections?.();
       });
-      app.db.close();
+      await app.db.close();
       for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;

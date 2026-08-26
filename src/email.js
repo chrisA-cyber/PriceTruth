@@ -131,28 +131,28 @@ function createMailer(db, { deliveryGuard = null } = {}) {
   }
 
   async function processPending(limit = 10) {
-    const items = db.claimOutbox(limit);
+    const items = await db.claimOutbox(limit);
     const results = [];
     for (const item of items) {
       const metadata = (() => { try { return JSON.parse(item.metadata_json || '{}'); } catch { return {}; } })();
       try {
-        if (!db.isNotificationDeliveryAllowed(item.account_id, item.template, metadata)) {
-          db.cancelNotificationOutbox(item.account_id, [item.template]);
-          if (item.template === 'price-alert') db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
+        if (!await db.isNotificationDeliveryAllowed(item.account_id, item.template, metadata)) {
+          await db.cancelNotificationOutbox(item.account_id, [item.template]);
+          if (item.template === 'price-alert') await db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
           results.push({ id: item.id, status: 'canceled' });
           continue;
         }
         if (deliveryGuard && !await deliveryGuard({ record: item, metadata })) {
-          db.cancelOutbox(item.id, 'delivery freshness gate failed');
-          if (item.template === 'price-alert') db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
+          await db.cancelOutbox(item.id, 'delivery freshness gate failed');
+          if (item.template === 'price-alert') await db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
           results.push({ id: item.id, status: 'canceled' });
           continue;
         }
         const messageId = await deliver(item);
-        const markedSent = db.transaction(() => {
-          if (!db.markOutboxSent(item.id, messageId)) return false;
-          if (item.template === 'price-alert') db.confirmAlertDelivery(metadata.alertId, metadata.triggerKey);
-          db.recordDeliveryEvent({ outboxId: item.id, provider: resolveTransport(), providerMessageId: messageId, type: 'sent' });
+        const markedSent = await db.transaction(async () => {
+          if (!await db.markOutboxSent(item.id, messageId, item.lease_token || null)) return false;
+          if (item.template === 'price-alert') await db.confirmAlertDelivery(metadata.alertId, metadata.triggerKey);
+          await db.recordDeliveryEvent({ outboxId: item.id, provider: resolveTransport(), providerMessageId: messageId, type: 'sent' });
           return true;
         });
         if (markedSent) {
@@ -161,12 +161,17 @@ function createMailer(db, { deliveryGuard = null } = {}) {
       } catch (error) {
         const retryable = error?.retryable !== false;
         const exhaustedAlert = retryable && item.template === 'price-alert' && item.attempts >= item.max_attempts;
-        if (exhaustedAlert) db.redriveAlertOutbox(item.id, `${error.message}; retained for automatic redrive`);
-        else if (!retryable) db.failOutboxTerminal(item.id, error.message);
-        else db.markOutboxFailed(item.id, error.message);
-        const latest = db.getOutbox(item.id);
+        if (exhaustedAlert) await db.redriveAlertOutbox(
+          item.id,
+          `${error.message}; retained for automatic redrive`,
+          undefined,
+          item.lease_token || null,
+        );
+        else if (!retryable) await db.failOutboxTerminal(item.id, error.message, item.lease_token || null);
+        else await db.markOutboxFailed(item.id, error.message, item.lease_token || null);
+        const latest = await db.getOutbox(item.id);
         if (item.template === 'price-alert' && latest?.status === 'failed') {
-          db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
+          await db.releaseAlertTrigger(metadata.alertId, metadata.triggerKey);
         }
         results.push({ id: item.id, status: latest?.status || 'failed', error: error.message });
       }
@@ -181,12 +186,12 @@ function createMailer(db, { deliveryGuard = null } = {}) {
 
   async function complete(record, { sendNow = true } = {}) {
     if (sendNow && ['pending', 'retry'].includes(record.status)) await processPending(10);
-    const latest = db.getOutbox(record.id);
+    const latest = await db.getOutbox(record.id);
     return { id: latest.id, status: latest.status, attempts: latest.attempts, providerMessageId: latest.provider_message_id || null };
   }
 
   async function enqueue({ sendNow = true, ...message }) {
-    const record = db.enqueueOutbox(prepare(message));
+    const record = await db.enqueueOutbox(prepare(message));
     return complete(record, { sendNow });
   }
 

@@ -6,7 +6,7 @@ const originalLog = console.log;
 console.log = () => {};
 const originalDisableWorker = process.env.DISABLE_WORKER;
 process.env.DISABLE_WORKER = '1';
-const { server, db } = createApp({ dbPath: ':memory:' });
+const { server, db } = await createApp({ dbPath: ':memory:' });
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -53,7 +53,7 @@ try {
   console.log = originalLog;
   await new Promise((resolve) => server.close(resolve));
   server.closeAllConnections();
-  db.close();
+  await db.close();
   if (originalDisableWorker === undefined) delete process.env.DISABLE_WORKER;
   else process.env.DISABLE_WORKER = originalDisableWorker;
 }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { verifyLivePriceCatalog } from '../src/billing.js';
 import { catalogFreshness as subscriptionCatalogFreshness } from '../src/providers/subscriptions.js';
+import { isPublicHostname, isPublicHttpsUrl, isPublicHttpsOrigin } from '../src/security.js';
 
 function parseEnv(text) {
   const out = {};
@@ -20,25 +21,18 @@ function parseEnv(text) {
   return out;
 }
 
-function publicHostname(value) {
-  const host = String(value || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-  if (!host || !host.includes('.') || /^\d+(?:\.\d+){3}$/.test(host) || host.includes(':')) return false;
-  if (['localhost', 'test', 'example', 'invalid', 'local', 'internal', 'lan'].some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
-  if (['example.com', 'example.net', 'example.org'].some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
-  return /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host);
-}
-
 function publicEmailAddress(value, { displayName = false } = {}) {
   const clean = String(value || '').trim();
   const bracketed = clean.match(/^.{1,100}<([^<>]+)>$/);
   if (bracketed && !displayName) return false;
   const address = bracketed ? bracketed[1].trim() : clean;
   const match = address.match(/^[^\s@<>]{1,64}@([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)$/);
-  return Boolean(match && publicHostname(match[1]));
+  return Boolean(match && isPublicHostname(match[1]));
 }
 
 function validateProductionEnv(env, { now = Date.now() } = {}) {
   const failures = [];
+  const netlifyMode = env.DATABASE_MODE === 'netlify';
   const requireValue = (name, test, message) => {
     const value = env[name];
     if (!value) failures.push(`${name}: missing`);
@@ -46,14 +40,21 @@ function validateProductionEnv(env, { now = Date.now() } = {}) {
   };
 
   requireValue('NODE_ENV', (v) => v === 'production', 'must be production');
-  requireValue('PUBLIC_BASE_URL', (value) => {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' && !url.username && !url.password && publicHostname(url.hostname) &&
-        url.pathname.replace(/\/+$/, '') === '' && !url.search && !url.hash;
-    } catch { return false; }
-  }, 'must be an origin-only HTTPS URL');
-  requireValue('PRICETRUTH_DB', (v) => v !== ':memory:' && path.isAbsolute(v), 'must be an absolute durable path');
+  const canonicalOrigin = env.PUBLIC_BASE_URL || (netlifyMode ? env.URL : null);
+  const canonicalOriginValid = isPublicHttpsOrigin;
+  // Native Netlify derives the canonical origin from its trusted site context,
+  // so an override is optional. If either the override or Netlify's automatic
+  // URL is supplied, it must still satisfy the exact public-origin contract.
+  if (!canonicalOrigin && !netlifyMode) failures.push('PUBLIC_BASE_URL: missing');
+  else if (canonicalOrigin && !canonicalOriginValid(canonicalOrigin)) {
+    failures.push(`${env.PUBLIC_BASE_URL ? 'PUBLIC_BASE_URL' : 'URL'}: must be an origin-only HTTPS URL`);
+  }
+  if (netlifyMode) {
+    // Netlify injects the branch-aware NETLIFY_DB_URL at runtime. The live
+    // readiness probe verifies the actual Postgres connection and schema.
+  } else {
+    requireValue('PRICETRUTH_DB', (v) => v !== ':memory:' && path.isAbsolute(v), 'must be an absolute durable path');
+  }
   requireValue('ADMIN_TOKEN', (v) => v.length >= 32 && v.length <= 512 && /^[\x21-\x7E]+$/.test(v) && new Set(v).size >= 8 && !/(?:changeme|password|placeholder|example|admin[_-]?token|test[_-]?token)/i.test(v), 'must be a non-placeholder high-entropy token of at least 32 characters');
   requireValue('EMAIL_TRANSPORT', (v) => v === 'resend', 'must be resend');
   requireValue('RESEND_API_KEY', (v) => /^re_[A-Za-z0-9_-]{12,}$/.test(v), 'does not match a Resend key shape');
@@ -64,7 +65,7 @@ function validateProductionEnv(env, { now = Date.now() } = {}) {
   requireValue('LEGAL_OPERATOR_NAME', legalText, 'must be an approved non-placeholder public operator name');
   requireValue('LEGAL_JURISDICTION', legalText, 'must be an approved non-placeholder jurisdiction');
   if (env.SUPPORT_CONTACT_URL) {
-    requireValue('SUPPORT_CONTACT_URL', (v) => { try { const u = new URL(v); return u.protocol === 'https:' && !u.username && !u.password && publicHostname(u.hostname); } catch { return false; } }, 'must be a public HTTPS support URL');
+    requireValue('SUPPORT_CONTACT_URL', (v) => { try { const u = new URL(v); return u.protocol === 'https:' && !u.username && !u.password && isPublicHostname(u.hostname); } catch { return false; } }, 'must be a public HTTPS support URL');
   } else requireValue('SUPPORT_CONTACT_EMAIL', (v) => publicEmailAddress(v), 'must be a public support email when SUPPORT_CONTACT_URL is absent');
   requireValue('LEGAL_EFFECTIVE_DATE', (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Date.parse(`${v}T00:00:00Z`) <= now, 'must be a valid non-future YYYY-MM-DD date');
   requireValue('LEGAL_APPROVED', (v) => v === '1', 'must be 1 after operator approval');
@@ -73,7 +74,10 @@ function validateProductionEnv(env, { now = Date.now() } = {}) {
   requireValue('ENABLE_DEMO_SEED', (v) => v === '0', 'must be explicitly 0 for a paid launch');
   requireValue('STRIPE_AUTOMATIC_TAX', (v) => v === '1', 'must be 1 after Stripe Tax and required registrations are configured');
   requireValue('ENABLE_ACCOUNTS', (v) => v === '1', 'must be 1 for authenticated paid fulfillment');
-  if (env.DISABLE_WORKER === '1') failures.push('DISABLE_WORKER: must not be 1');
+  requireValue('DISABLE_WORKER', (v) => v === '0', 'must be 0 for production');
+  if (netlifyMode || env.WORKER_MODE === 'netlify-background') {
+    requireValue('WORKER_DISPATCH_SECRET', (v) => v.length >= 32, 'must contain at least 32 characters for scheduled worker dispatch');
+  }
 
   requireValue('STRIPE_SECRET_KEY', (v) => /^sk_live_[A-Za-z0-9_]{12,}$/.test(v), 'must be a live secret key');
   requireValue('STRIPE_WEBHOOK_SECRET', (v) => /^whsec_[A-Za-z0-9_]{12,}$/.test(v), 'does not match a signing secret');
@@ -114,7 +118,7 @@ function validateProductionEnv(env, { now = Date.now() } = {}) {
     }
   }
   if (verticals.includes('retail')) {
-    requireValue('RETAIL_API_URL', (v) => /^https:\/\//.test(v), 'must use HTTPS');
+    requireValue('RETAIL_API_URL', isPublicHttpsUrl, 'must be a public HTTPS endpoint with no credentials or fragment');
     requireValue('RETAIL_API_KEY');
   }
   return failures;

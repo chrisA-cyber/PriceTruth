@@ -130,7 +130,10 @@ pretend otherwise. Retail search therefore fails closed by default and exposes a
 slot: set `RETAIL_API_URL` (optionally `RETAIL_API_KEY`) to a feed that
 answers `GET <url>?q=...` with JSON `{ name, url?, price_cents, currency?, shipping_cents?,
 taxPct? }`. When wired, results are labeled `source: live:retail-feed`, `certainty: live`, and
-the engine still reveals shipping/handling/tax on top — which is the whole point.
+the engine still reveals shipping/handling/tax on top — which is the whole point. Production
+accepts only a public HTTPS endpoint with no URL credentials or fragment; endpoint paths and
+existing query parameters are preserved. Redirects fail closed and are never followed, so a
+configured bearer credential cannot cross to another origin or be downgraded to HTTP.
 
 ## Price history
 

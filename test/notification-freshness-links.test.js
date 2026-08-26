@@ -31,7 +31,7 @@ describe('notification freshness and report links', () => {
     const baseNow = realNow();
     Date.now = () => baseNow;
 
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     const base = await listen(app.server);
     try {
       const account = app.db.verifyAccount(app.db.getOrCreateAccount('freshness-links@launch-operator.com').id);

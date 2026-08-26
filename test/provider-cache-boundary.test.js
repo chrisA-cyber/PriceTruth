@@ -38,7 +38,7 @@ describe('provider cache fail-closed boundary', () => {
     const saved = { url: process.env.RETAIL_API_URL, ttl: process.env.PROVIDER_QUERY_CACHE_SECONDS };
     process.env.RETAIL_API_URL = `${upstreamBase}/lookup`;
     process.env.PROVIDER_QUERY_CACHE_SECONDS = '3600';
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     const base = await listen(app.server);
     try {
       assert.equal((await search(base, 'retail', 'cached product')).status, 200);
@@ -65,7 +65,7 @@ describe('provider cache fail-closed boundary', () => {
     process.env.SUBSCRIPTION_CATALOG_MAX_AGE_DAYS = '93';
     process.env.PROVIDER_QUERY_CACHE_SECONDS = '3600';
     Date.now = () => Date.parse('2026-08-26T12:00:00.000Z');
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     const base = await listen(app.server);
     try {
       assert.equal((await search(base, 'subscription', 'netflix')).status, 200);

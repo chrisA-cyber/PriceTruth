@@ -9,7 +9,7 @@ import { createJobWorker } from '../src/jobs.js';
 import * as billing from '../src/billing.js';
 
 async function startApp() {
-  const created = createApp({ dbPath: ':memory:' });
+  const created = await createApp({ dbPath: ':memory:' });
   await new Promise((resolve, reject) => {
     created.server.once('error', reject);
     created.server.listen(0, '127.0.0.1', resolve);
@@ -634,13 +634,13 @@ describe('durable outbox and job primitives', () => {
 });
 
 describe('billing lifecycle and launch gate', () => {
-  it('rolls the event ledger and account grant back together if a side effect fails', () => {
+  it('rolls the event ledger and account grant back together if a side effect fails', async () => {
     const db = open(':memory:');
     const original = db.upsertEntitlement;
     db.upsertEntitlement = () => { throw new Error('simulated entitlement write failure'); };
     try {
       const event = billing.mockCompletedEvent({ planId: 'premium', email: 'rollback@example.com', sessionId: 'cs_rollback' });
-      assert.throws(() => billing.applyEvent(event, db), /simulated entitlement/);
+      await assert.rejects(() => billing.applyEvent(event, db), /simulated entitlement/);
       assert.equal(db.revenueSummary().paid_events, 0);
       assert.equal(db.getAccount('rollback@example.com'), null);
     } finally {
@@ -649,12 +649,12 @@ describe('billing lifecycle and launch gate', () => {
     }
   });
 
-  it('updates and revokes entitlements on subscription lifecycle events', () => {
+  it('updates and revokes entitlements on subscription lifecycle events', async () => {
     const db = open(':memory:');
     try {
-      billing.applyEvent(billing.mockCompletedEvent({ planId: 'premium', email: 'subscriber@example.com', sessionId: 'cs_lifecycle' }), db);
+      await billing.applyEvent(billing.mockCompletedEvent({ planId: 'premium', email: 'subscriber@example.com', sessionId: 'cs_lifecycle' }), db);
       const account = db.getAccount('subscriber@example.com');
-      const deleted = billing.applyEvent({
+      const deleted = await billing.applyEvent({
         id: 'evt_subscription_deleted', type: 'customer.subscription.deleted', livemode: false,
         data: { object: { id: 'sub_mock_cs_lifecycle', customer: 'cus_mock_cs_lifecycle', status: 'canceled', metadata: { plan: 'premium' } } },
       }, db);
@@ -665,7 +665,7 @@ describe('billing lifecycle and launch gate', () => {
     } finally { db.close(); }
   });
 
-  it('requires the entire paid stack when live billing is explicitly enabled', () => {
+  it('requires the entire paid stack when live billing is explicitly enabled', async () => {
     const saved = {};
     const names = ['ENABLE_LIVE_BILLING', 'ENABLE_DEMO_SEED', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_PREMIUM', 'STRIPE_PRICE_API_STARTER', 'STRIPE_PRICE_API_PRO', 'PUBLIC_BASE_URL', 'PRICETRUTH_DB'];
     for (const name of names) { saved[name] = process.env[name]; delete process.env[name]; }
@@ -676,7 +676,7 @@ describe('billing lifecycle and launch gate', () => {
       assert.ok(result.missing.includes('demoSeedDisabled'));
       assert.ok(result.missing.includes('webhookSecret'));
       assert.ok(result.missing.includes('durableDbConfigured'));
-      assert.throws(() => createApp({ dbPath: ':memory:' }), /launch configuration is incomplete/);
+      await assert.rejects(() => createApp({ dbPath: ':memory:' }), /launch configuration is incomplete/);
     } finally {
       for (const name of names) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; }
     }

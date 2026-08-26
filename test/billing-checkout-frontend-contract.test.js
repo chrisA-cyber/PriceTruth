@@ -12,7 +12,7 @@ async function startApp(dbPath) {
     enqueue: async () => ({ status: 'queued' }),
     processPending: async () => ({ processed: 0 }),
   };
-  const created = createApp({ dbPath, mailer, priceCatalogVerification: { ok: true } });
+  const created = await createApp({ dbPath, mailer, priceCatalogVerification: { ok: true } });
   await new Promise((resolve, reject) => {
     created.server.once('error', reject);
     created.server.listen(0, '127.0.0.1', resolve);

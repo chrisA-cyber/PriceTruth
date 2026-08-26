@@ -24,8 +24,8 @@ describe('catalog product response freshness', () => {
     const savedMaxAge = process.env.SUBSCRIPTION_CATALOG_MAX_AGE_DAYS;
     process.env.SUBSCRIPTION_CATALOG_MAX_AGE_DAYS = '30';
     Date.now = () => Date.parse('2026-08-26T12:00:00.000Z');
-    const app = createApp({ dbPath: ':memory:' });
-    seedSubscriptionCatalog(app.db);
+    const app = await createApp({ dbPath: ':memory:' });
+    await seedSubscriptionCatalog(app.db);
     const base = await listen(app.server);
     try {
       const freshResponse = await fetch(`${base}/api/products/catalog-sub-netflix-standard?days=30`);
@@ -71,7 +71,7 @@ describe('catalog product response freshness', () => {
     });
     delete process.env.STRIPE_SECRET_KEY;
     Date.now = () => Date.parse('2026-08-26T12:00:00.000Z');
-    const app = createApp({ dbPath: ':memory:' });
+    const app = await createApp({ dbPath: ':memory:' });
     const base = await listen(app.server);
     try {
       const key = app.db.createApiKey('catalog-runtime-gate', 'starter');

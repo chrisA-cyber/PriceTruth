@@ -24,10 +24,12 @@ score. Honesty about uncertainty is a product feature, not a footnote.
 ## Quickstart
 
 ```
+npm install
 npm start
 ```
 
-That's it — **zero runtime dependencies** (Node ≥ 24, built-in SQLite). The server boots on
+Node 24 supplies the local SQLite engine; the installed Netlify packages supply
+the production Postgres and Function runtime adapters. The server boots on
 [http://localhost:4780](http://localhost:4780). Local development includes clearly labeled
 illustrative reports plus the dated verified subscription catalog. Search never substitutes
 a modeled price: unsupported lookups route to the manual analyzer. Billing remains an
@@ -46,76 +48,88 @@ Other commands:
 | `npm run launch:gate -- --env-file <file>` | Fail-closed production configuration audit |
 | `npm run seed` | Re-seed demo data + mint a demo B2B API key |
 | `npm run keygen -- "Acme" pro` | Mint a B2B API key (printed once, stored hashed) |
+| `npm run db:cutover -- --source=<snapshot.db>` | Validate and plan a SQLite-to-Netlify Database cutover (non-destructive by default) |
 
 ## Deploying a demo
 
-PriceTruth is a **persistent Node server** (it serves a live API, writes to SQLite at
-runtime, and owns background work). Its backend therefore needs a host that runs a
-long-lived Node process. It auto-seeds its demo data on boot, so no database needs to be
-provisioned for a demo.
+**Netlify (recommended).** PriceTruth now ships as a same-origin Netlify app:
+the CDN serves the browser bundle and native Node 24 Functions handle
+`/api/*`, `/go/*`, `/download/*`, and `/billing/*`. There is no Render service,
+external backend origin, or proxy to configure.
 
-**Render (recommended, free tier).** A blueprint ships in [`render.yaml`](render.yaml):
+1. In Netlify choose **Add new project -> Import an existing project**, connect
+   this repository, and select `main`.
+2. Accept the detected `netlify.toml` settings and deploy. Netlify supplies the
+   site URL automatically; no external backend-origin variable is needed.
+3. A zero-configuration deployment enters a safe demo mode backed by the
+   automatically provisioned Netlify Database, with accounts, email, workers,
+   and billing disabled. Verify `/api/health` and `/api/ready` on the generated
+   URL. Demo readiness may be HTTP 200 while its payload correctly reports
+   `worker.enabled=false` and `worker.dispatchConfigured=false`; account and
+   paid-production launch gates remain closed.
 
-1. In Render: **New + → Blueprint**, connect this repo, **Apply**.
-2. The blueprint sets `HOST=0.0.0.0` + `NODE_ENV=production`, pins Node 24, runs
-   `npm run build` as a boot preflight, and gates traffic on `/api/ready`.
-3. Set its required public origin and optionally add provider credentials. Accounts,
-   customer email, and charging remain disabled. Do not add Stripe credentials to this
-   ephemeral blueprint; paid service uses [`render.production.yaml`](render.production.yaml).
+For durable accounts and paid operation, confirm the integrated Netlify Database
+(managed Postgres), configure Function-scoped secrets, and verify the
+signed scheduled/background worker before enabling email or charging. The
+worker requires a unique `WORKER_DISPATCH_SECRET` of at least 32 characters.
+Netlify applies the repository's database migrations before publication and gives Deploy
+Previews isolated database branches. Follow the exact dashboard, environment,
+preview-safety, webhook, and launch steps in
+[`docs/NETLIFY.md`](docs/NETLIFY.md).
 
-**Railway / Fly.io / any PaaS.** Set `HOST=0.0.0.0`, an origin-only
-`PUBLIC_BASE_URL`, and the explicit capability/data flags from an environment
-template (the platform supplies `PORT`), then start with `npm start` (see
-[`Procfile`](Procfile)). No build tooling or production dependencies are needed.
-The server also auto-binds `0.0.0.0` when it detects a hosted platform
-(`RENDER`/`RAILWAY_ENVIRONMENT`/`FLY_APP_NAME`/`DYNO`/`NODE_ENV=production`).
+**Container hosts remain supported.** Railway, Fly.io, Render, or another
+long-running Node host can use the non-root container and SQLite volume path.
+Set `HOST=0.0.0.0`, an origin-only `PUBLIC_BASE_URL`, and the explicit
+capability/data flags from an environment template; then start with `npm start`
+(see [`Procfile`](Procfile)). The demo [`render.yaml`](render.yaml) and paid
+[`render.production.yaml`](render.production.yaml) remain available as
+alternatives, but are no longer required for Netlify.
 
-**Netlify.** The supported deployment keeps the durable Node/SQLite backend on
-Render, Fly.io, Railway, or an equivalent host, while Netlify publishes the static
-frontend and proxies every dynamic route to that backend. `netlify.toml` and
-`npm run build:netlify` are included and fail closed if
-`PRICETRUTH_BACKEND_ORIGIN` is missing or unsafe. See
-[`docs/NETLIFY.md`](docs/NETLIFY.md). A standalone Netlify Functions deployment
-would first require migrating SQLite to Postgres and the permanent worker to
-scheduled/background workloads.
+Existing Render data is not abandoned: the native deployment guide includes a
+read-only plan and transactionally reconciled SQLite-to-Postgres importer. A
+fresh Netlify target is required by default; populated targets need an explicit
+append-only override and reject all collisions.
 
-> **Durability caveat.** The free tier's disk is ephemeral and idle instances sleep — fine
-> for a demo, since the app reseeds the demo catalog and 90-day history on every cold start.
-> But all runtime data is wiped on restart/redeploy. That includes demo history and,
-> on any incorrectly configured ephemeral custom deployment, customer alerts,
-> entitlements, API keys, and the revenue ledger.
-> **Do not enable live billing on an ephemeral free instance.** For anything persistent,
-> attach a disk and point `PRICETRUTH_DB` at it (see the commented `disk:` block in
-> [`render.yaml`](render.yaml)), and put TLS in front (the app speaks plain HTTP and expects
-> the platform to terminate TLS).
+> **Durability caveat.** A linked Netlify deployment uses its automatically
+> provisioned Database even in safe demo mode; a direct Function invocation
+> without `NETLIFY_DB_URL` falls back to disposable in-memory data. Never enable
+> accounts, customer email, live billing, or paid entitlements on an in-memory
+> deployment. Native production must use Netlify Database and the signed
+> scheduled/background worker. A container deployment instead needs a
+> persistent volume and an absolute `PRICETRUTH_DB` path.
 
 ## Production deployment
 
-Use the non-root [`Dockerfile`](Dockerfile), persistent-volume
-[`compose.yaml`](compose.yaml), and environment templates in `deploy/`. Paid
-launch fails closed unless HTTPS, durable storage, verified Resend delivery,
-outbox encryption, workers, live Stripe lifecycle configuration, and live data
-for every declared launch vertical are present. `GET /api/ready` reports the
-same runtime boundary; `GET /api/health` is liveness only.
+Use the native [Netlify deployment guide](docs/NETLIFY.md), or the non-root
+[`Dockerfile`](Dockerfile), persistent-volume [`compose.yaml`](compose.yaml),
+and environment templates in `deploy/` for a container host. Paid launch fails
+closed unless HTTPS, durable storage, verified Resend delivery, outbox
+encryption, workers, live Stripe lifecycle configuration, and live data for
+every declared launch vertical are present. `GET /api/ready` reports the same
+runtime boundary; `GET /api/health` is liveness only.
 
 The complete promotion, proxy, rollback, backup/restore, monitoring, SLO,
 incident, and launch gates are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and
-[docs/LAUNCH-CHECKLIST.md](docs/LAUNCH-CHECKLIST.md). SQLite production uses one
-active writer; move to managed PostgreSQL before horizontal replication.
+[docs/LAUNCH-CHECKLIST.md](docs/LAUNCH-CHECKLIST.md). Native Netlify uses
+managed Postgres. SQLite containers remain a single-writer compatibility path
+for local, internal, or controlled legacy operation; they are not the
+horizontally scalable flagship production architecture.
 
 ## Configuration
 
 Local development runs with **no configuration**: unsupported verified searches
 fail closed and hand off to manual advertised-price input; billing uses an explicit simulation. Production never
-silently falls back to mock charging. Start with the appropriate template in
-`deploy/`; inject secrets through the host's secret store, never the repository.
+silently falls back to mock charging. Start with
+[`deploy/netlify.env.example`](deploy/netlify.env.example) for native Netlify or
+the appropriate container template in `deploy/`; inject secrets through the
+host's secret store, never the repository.
 
 | Env var | Effect when set | Unset behavior |
 |---|---|---|
-| `PUBLIC_BASE_URL` | Origin-only canonical URL for links, checkout redirects, OG tags, and sitemap | Derived locally; production startup fails |
+| `PUBLIC_BASE_URL` | Optional origin-only canonical override for links, checkout redirects, OG tags, and sitemap | Netlify derives its trusted site origin; container production requires an explicit value |
 | `ENABLE_ACCOUNTS` | Enables authenticated account/customer surfaces when all email, legal, origin, and storage checks pass | Disabled in production |
 | `REQUIRE_EMAIL` / `EMAIL_TRANSPORT` / `RESEND_API_KEY` / `EMAIL_FROM` | Requires verified Resend delivery for sign-in, verification, alerts, and digests | Console/dev only; disabled in production |
-| `OUTBOX_ENCRYPTION_KEY` / `RESEND_WEBHOOK_SECRET` | Encrypts durable email payloads and verifies delivery events | Paid/account readiness fails |
+| `OUTBOX_ENCRYPTION_KEY` / `PENDING_KEY_ENCRYPTION_KEY` / `RESEND_WEBHOOK_SECRET` | Encrypts durable email and pending-key payloads and verifies delivery events; preserve existing encryption values during cutover | Paid/account readiness fails; pending keys fall back to the outbox key |
 | `ADMIN_TOKEN` | Enables owner-only `/admin` + `/api/admin/metrics` (sent as `X-Admin-Token`) | Admin surfaces disabled (403) |
 | `ENABLE_LIVE_BILLING` | Explicit paid-production safety switch | Live charging disabled |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Live Stripe API access and raw-body webhook verification | Local simulation; disabled in production |
@@ -127,15 +141,16 @@ silently falls back to mock charging. Start with the appropriate template in
 | `JSON_BODY_TIMEOUT_MS` / `PROVIDER_RESPONSE_LIMIT_BYTES` | Bounds client JSON upload time and upstream provider JSON size (defaults: 10 seconds / 1 MiB) | Safe defaults apply |
 | `WEBHOOK_BODY_TIMEOUT_MS` / `STRIPE_WEBHOOK_BODY_LIMIT_BYTES` / `EMAIL_WEBHOOK_BODY_LIMIT_BYTES` | Route-specific webhook read and payload limits | Safe defaults apply (10 seconds / 256 KiB / 128 KiB) |
 | `WEBHOOK_MAX_CONCURRENCY` / `WEBHOOK_PREAUTH_MAX_CONCURRENCY_PER_IP` | Bounds verified global processing and unsigned per-IP body reads | Safe defaults apply (8 / 2) |
-| `DISABLE_WORKER` | Maintenance-only worker stop when set to `1` | Durable in-process worker runs |
+| `WORKER_DISPATCH_SECRET` | Signs native Netlify scheduled-to-background worker requests; use a unique value of at least 32 characters | Native production readiness fails closed |
+| `DISABLE_WORKER` | Maintenance-only worker stop when set to `1` | Netlify uses its signed scheduled/background worker; containers use the durable in-process worker |
 | `ENABLE_DEMO_SEED` | Explicitly permits synthetic catalog/history in demo deployment; paid production requires the exact value `0` | Production removes demo seed |
 | `TICKETMASTER_API_KEY` | Observed event listing prices (not launch-grade all-in checkout attestation) | Verified search unavailable; manual analyzer remains available |
 | `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET` | Production Amadeus flight + hotel quotes when both credentials and the exact production origin are present | Verified search unavailable; manual analyzer remains available |
 | `AMADEUS_HOST` | Must be the origin-only `https://api.amadeus.com`; sandbox/test hosts are deliberately rejected | Amadeus search is disabled |
-| `RETAIL_API_URL` / `RETAIL_API_KEY` | Optional generic retail feed | Verified search unavailable; manual analyzer remains available |
+| `RETAIL_API_URL` / `RETAIL_API_KEY` | Optional generic retail feed; production URL must be a public HTTPS endpoint with no embedded credentials or fragment | Verified search unavailable; manual analyzer remains available |
 | `ENABLE_AFFILIATE_LINKS` / `AFFILIATE_RELATIONSHIPS_APPROVED` | Both must be `1`, with a public disclosure URL and a real per-partner tag, before `/go/*` links exist | Affiliate routes and partner metadata are disabled |
 | `AFFILIATE_DISCLOSURE_URL` / `AFFILIATE_TAG_<PARTNER>` | Approved public disclosure and secret-store partner identifier; demo/test/placeholder tags are rejected | Affiliate routes remain disabled |
-| `PRICETRUTH_DB` | SQLite file path | `data/pricetruth.db` (or `:memory:` in tests) |
+| `PRICETRUTH_DB` | SQLite file path for the local/server or container adapter; do not set for native Netlify Postgres | `data/pricetruth.db` locally (or `:memory:` in tests/demo Functions) |
 
 `npm run build` prints source provenance plus billing mode/readiness—run it after
 configuration changes. Subscriptions are always backed by a
@@ -149,7 +164,8 @@ subscription notifications fail closed after the verified freshness window expir
 - **True-price engine** (`src/engine/`) — per-vertical fee models for hotels, flights,
   event tickets, subscriptions, and retail; integer-cents math throughout; certainty and
   confidence on every line item.
-- **Price history + deal quality** — SQLite-backed history with 30/90-day stats and a
+- **Price history + deal quality** — durable history (SQLite locally, managed
+  Postgres on Netlify) with 30/90-day stats and a
   0–100 deal score (position in range + vs. average + fee load).
 - **Live data providers** (`src/providers/`) — one uniform search over all five verticals
   (`POST /api/search`): live source when a truth-usable provider is configured (production Amadeus for
@@ -166,8 +182,8 @@ subscription notifications fail closed after the verified freshness window expir
 - **B2B pricing API** (`/api/v1/*`) — key-authenticated, metered, quota-tiered. See
   [docs/API.md](docs/API.md); the full OpenAPI 3.1 document is served at
   [`/api/openapi`](http://localhost:4780/api/openapi).
-- **Monetization, wired** — Stripe billing with **zero dependencies** (REST over `fetch` +
-  `node:crypto` HMAC webhooks), with a fully-working simulated mock mode: consumer
+- **Monetization, wired** — Stripe billing over direct REST + `node:crypto`
+  HMAC webhooks (no Stripe SDK), with a fully-working simulated mock mode: consumer
   freemium→premium upgrade, B2B API-key issuance on checkout, usage metering, self-serve
   portal, and an owner-only revenue/usage dashboard (`/admin`). Affiliate interstitials with
   FTC-compliant disclosure and an open-redirect guard. See [docs/BUSINESS.md](docs/BUSINESS.md).
@@ -176,7 +192,8 @@ subscription notifications fail closed after the verified freshness window expir
 - **Security** — passwordless hashed-token sessions, CSRF + same-origin mutations,
   strict CSP, rate limiting, input allowlists, hashed/rotatable API keys,
   prepared statements, signed/idempotent webhooks, encrypted outbox payloads,
-  traversal/open-redirect guards, and no third-party production runtime code.
+  traversal/open-redirect guards, and a narrow production dependency surface
+  limited to the Netlify runtime/database adapters.
   Threat model in [docs/SECURITY.md](docs/SECURITY.md).
 
 ## API in 10 seconds
@@ -219,14 +236,14 @@ shown as a live quote.
 ## Layout
 
 ```
-src/            engine, SQLite layer, secure zero-dep HTTP server, build preflight
+src/            engine, SQLite/Postgres data adapters, secure HTTP server, build preflight
 src/providers/  verified live/catalog clients with fail-closed search behavior
 src/billing.js  zero-dep Stripe (REST + HMAC webhooks) with a mock mode
 src/data/       fee datasets, subscription snapshot, affiliate partner allowlist
 public/         web app (no build step) + owner-only admin dashboard
 extension/      publishable MV3 extension, seller adapters, local calculator/settings
 openapi/        full OpenAPI 3.1 contract and SDK generator configuration
-scripts/        gates, smoke probes, package, backup/restore, post-deploy verification
+scripts/        gates, smoke probes, package, SQLite backup/cutover, post-deploy verification
 deploy/         local/staging/production environment templates
 docs/           API, deployment, operations, SLO, incident, accessibility, legal
 test/           node:test integration/fixtures plus Playwright browser/axe suites

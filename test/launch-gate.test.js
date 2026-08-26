@@ -43,6 +43,23 @@ describe('production launch gate', () => {
     assert.deepEqual(validate(valid), []);
   });
 
+  it('accepts Netlify Database with the signed background worker', () => {
+    const netlify = {
+      ...valid,
+      DATABASE_MODE: 'netlify',
+      WORKER_MODE: 'netlify-background',
+      WORKER_DISPATCH_SECRET: 'w'.repeat(48),
+      DISABLE_WORKER: '0',
+    };
+    delete netlify.PRICETRUTH_DB;
+    delete netlify.PUBLIC_BASE_URL;
+    assert.deepEqual(validate(netlify), []);
+
+    delete netlify.WORKER_MODE;
+    netlify.WORKER_DISPATCH_SECRET = 'too-short';
+    assert.ok(validate(netlify).some((failure) => failure.startsWith('WORKER_DISPATCH_SECRET:')));
+  });
+
   it('fails closed when durable storage, email, workers, or billing is unsafe', () => {
     const failures = validate({ ...valid, PUBLIC_BASE_URL: 'http://example.com', PRICETRUTH_DB: ':memory:', EMAIL_TRANSPORT: 'console', DISABLE_WORKER: '1', STRIPE_SECRET_KEY: 'sk_test_nope', ENABLE_DEMO_SEED: '1' });
     assert.ok(failures.some((f) => f.startsWith('PUBLIC_BASE_URL:')));
@@ -63,6 +80,29 @@ describe('production launch gate', () => {
       assert.ok(failures.some((f) => f.startsWith(name + ':')), name);
     }
     assert.ok(failures.some((f) => f.startsWith('LAUNCH_VERTICALS: ticket is unavailable')));
+  });
+
+  it('accepts a public retail endpoint path and rejects credential, local-network, and fragment targets', () => {
+    const retail = {
+      ...valid,
+      LAUNCH_VERTICALS: 'retail',
+      RETAIL_API_URL: 'https://feed.launch-operator.com/v1/search?market=us',
+      RETAIL_API_KEY: 'retail-secret',
+    };
+    assert.deepEqual(validate(retail), []);
+    for (const url of [
+      'http://feed.launch-operator.com/v1/search',
+      'https://user:secret@feed.launch-operator.com/v1/search',
+      'https://feed.launch-operator.com/v1/search#fragment',
+      'https://localhost/v1/search',
+      'https://127.0.0.1/v1/search',
+      'https://2130706433/v1/search',
+      'https://[::1]/v1/search',
+      'https://metadata.google.internal/computeMetadata/v1',
+    ]) {
+      const failures = validate({ ...retail, RETAIL_API_URL: url });
+      assert.ok(failures.some((failure) => failure.startsWith('RETAIL_API_URL:')), url);
+    }
   });
 
   it('rejects reserved or non-public sender and support destinations', () => {

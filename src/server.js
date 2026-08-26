@@ -10,7 +10,8 @@ import { analyze, VERTICALS } from './engine/analyze.js';
 import { dealQuality } from './engine/score.js';
 import {
   applySecurityHeaders, RateLimiter, HttpError, readJsonBody, readRawBody, validate, escapeHtml,
-  parseCookies, serializeCookie, requestId as makeRequestId, assertSameOrigin, isPublicHostname,
+  parseCookies, serializeCookie, requestId as makeRequestId, assertSameOrigin,
+  isPublicHostname, isPublicHttpsUrl, isPublicHttpsOrigin,
 } from './security.js';
 import { zip, prepareExtensionManifest } from './extzip.js';
 import { searchListing, providerStatus, SEARCH_VERTICALS, validateProviderQuery } from './providers/index.js';
@@ -31,9 +32,10 @@ import SUBSCRIPTION from './data/fees/subscription.json' with { type: 'json' };
 import partnersData from './data/partners.json' with { type: 'json' };
 
 const PARTNERS = partnersData.partners;
-const EXTENSION_DIR = path.join(import.meta.dirname, '..', 'extension');
-const PUBLIC_DIR = path.join(import.meta.dirname, '..', 'public');
-const OPENAPI_PATH = path.join(import.meta.dirname, '..', 'openapi', 'openapi.json');
+const PROJECT_ROOT = path.join(import.meta.dirname, '..');
+const EXTENSION_DIR = path.join(PROJECT_ROOT, 'extension');
+const PUBLIC_DIR = path.join(PROJECT_ROOT, 'public');
+const OPENAPI_PATH = path.join(PROJECT_ROOT, 'openapi', 'openapi.json');
 const PORT = Number(process.env.PORT) || 4780;
 
 const MIME = {
@@ -147,12 +149,12 @@ function productAlertEligible(product, { env = process.env, now = Date.now() } =
   return product.vertical !== 'subscription' || subscriptionCatalogFreshness({ env, now }).ok;
 }
 
-function catalogNotificationDeliveryAllowed(db, { record, metadata = {}, env = process.env, now = Date.now() } = {}) {
+async function catalogNotificationDeliveryAllowed(db, { record, metadata = {}, env = process.env, now = Date.now() } = {}) {
   if (!['price-alert', 'weekly-digest'].includes(record?.template)) return true;
-  const snapshotIsCurrent = (snapshot, product) => {
+  const snapshotIsCurrent = async (snapshot, product) => {
     if (!snapshot || !product || snapshot.productId !== product.id) return false;
     if (!productAlertEligible(product, { env, now })) return false;
-    const latest = db.getLatestPoint(product.id, { eligibleOnly: false });
+    const latest = await db.getLatestPoint(product.id, { eligibleOnly: false });
     if (!latest || latest.alertEligible !== true || latest.ts !== snapshot.pointAt || latest.true_cents !== snapshot.trueCents) return false;
     const evidence = currentSourceEvidence({ ...product, evidence: {
       ...latest.evidence,
@@ -162,23 +164,24 @@ function catalogNotificationDeliveryAllowed(db, { record, metadata = {}, env = p
   };
   if (record.template === 'price-alert') {
     const alertId = Number(metadata.alertId);
-    const alert = Number.isSafeInteger(alertId) && alertId > 0 ? db.getAlert(alertId, record.account_id) : null;
-    const product = alert ? db.getProduct(alert.product_id) : null;
+    const alert = Number.isSafeInteger(alertId) && alertId > 0 ? await db.getAlert(alertId, record.account_id) : null;
+    const product = alert ? await db.getProduct(alert.product_id) : null;
     const snapshot = {
       productId: metadata.productId,
       pointAt: metadata.pointAt,
       trueCents: Number(metadata.trueCents),
     };
-    return Boolean(alert && product && alert.product_id === snapshot.productId && snapshotIsCurrent(snapshot, product));
+    return Boolean(alert && product && alert.product_id === snapshot.productId && await snapshotIsCurrent(snapshot, product));
   }
   const snapshots = Array.isArray(metadata.productSnapshots) ? metadata.productSnapshots.slice(0, 20) : [];
   if (snapshots.length === 0 || !record.account_id) return false;
-  const watched = new Set(db.listWatchlist(record.account_id).map((product) => product.product_id));
-  return snapshots.every((raw) => {
+  const watched = new Set((await db.listWatchlist(record.account_id)).map((product) => product.product_id));
+  for (const raw of snapshots) {
     const snapshot = { productId: raw?.productId, pointAt: raw?.pointAt, trueCents: Number(raw?.trueCents) };
     if (!watched.has(snapshot.productId)) return false;
-    return snapshotIsCurrent(snapshot, db.getProduct(snapshot.productId));
-  });
+    if (!await snapshotIsCurrent(snapshot, await db.getProduct(snapshot.productId))) return false;
+  }
+  return true;
 }
 
 function currentSourceEvidence(product, { env = process.env, now = Date.now() } = {}) {
@@ -213,11 +216,11 @@ function currentSourceEvidence(product, { env = process.env, now = Date.now() } 
   return evidence;
 }
 
-function productPayload(db, product, { days = 30, includeHistory = false } = {}) {
+async function productPayload(db, product, { days = 30, includeHistory = false } = {}) {
   const currentEvidence = currentSourceEvidence(product);
   const sourceStale = currentEvidence?.provenance?.stale === true;
-  const stats = sourceStale ? null : db.getStats(product.id, days);
-  const rawLatest = db.getLatestPoint(product.id, { eligibleOnly: !sourceStale });
+  const stats = sourceStale ? null : await db.getStats(product.id, days);
+  const rawLatest = await db.getLatestPoint(product.id, { eligibleOnly: !sourceStale });
   const latest = rawLatest ? { ...rawLatest, evidence: currentSourceEvidence({ ...product, evidence: {
     ...rawLatest.evidence,
     refreshable: product.evidence?.refreshable === true,
@@ -255,7 +258,7 @@ function productPayload(db, product, { days = 30, includeHistory = false } = {})
     ...classification,
   };
   if (includeHistory) {
-    payload.history = db.getHistory(product.id, days).map((point) => {
+    payload.history = (await db.getHistory(product.id, days)).map((point) => {
       const evidence = currentSourceEvidence({ ...product, evidence: {
         ...point.evidence,
         refreshable: product.evidence?.refreshable === true,
@@ -361,7 +364,7 @@ function baseUrlFor(req) {
     try {
       const parsed = new URL(env);
       const validSchemeAndHost = process.env.NODE_ENV === 'production'
-        ? parsed.protocol === 'https:' && isPublicHostname(parsed.hostname)
+        ? isPublicHttpsOrigin(env)
         : ['http:', 'https:'].includes(parsed.protocol);
       if (validSchemeAndHost && !parsed.username && !parsed.password &&
           (parsed.pathname === '' || parsed.pathname === '/') && !parsed.search && !parsed.hash) return parsed.origin;
@@ -437,14 +440,15 @@ const EXTENSION_FILES = [
 ];
 const extZipCache = new Map(); // origin -> Buffer
 
-function buildExtensionZip(origin) {
-  const cached = extZipCache.get(origin);
+function buildExtensionZip(origin, extensionDir = EXTENSION_DIR) {
+  const cacheKey = `${extensionDir}\0${origin}`;
+  const cached = extZipCache.get(cacheKey);
   if (cached) return cached;
   const { hostname } = new URL(origin);
 
   const entries = EXTENSION_FILES.map((name) => {
     const binary = name.endsWith('.png');
-    let data = fs.readFileSync(path.join(EXTENSION_DIR, name), binary ? undefined : 'utf8');
+    let data = fs.readFileSync(path.join(extensionDir, name), binary ? undefined : 'utf8');
     if (name === 'config.js') {
       data = data
         .replace("appUrl: 'http://localhost:4780'", `appUrl: '${origin}'`)
@@ -457,7 +461,7 @@ function buildExtensionZip(origin) {
   });
 
   const buf = zip(entries);
-  if (extZipCache.size < 32) extZipCache.set(origin, buf);
+  if (extZipCache.size < 32) extZipCache.set(cacheKey, buf);
   return buf;
 }
 
@@ -480,17 +484,39 @@ function clientIp(req) {
   return req.socket.remoteAddress || 'unknown';
 }
 
-function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = null } = {}) {
-  const db = open(dbPath);
+async function createApp({
+  dbPath,
+  db: suppliedDb,
+  mailer: suppliedMailer,
+  priceCatalogVerification = null,
+  startTimers = true,
+  assetRoot = null,
+} = {}) {
+  const resolvedAssetRoot = assetRoot ? path.resolve(assetRoot) : PROJECT_ROOT;
+  const extensionDir = path.join(resolvedAssetRoot, 'extension');
+  const publicDir = path.join(resolvedAssetRoot, 'public');
+  const openapiPath = path.join(resolvedAssetRoot, 'openapi', 'openapi.json');
+  let db = suppliedDb;
+  if (!db && dbPath !== undefined) {
+    db = open(dbPath);
+  }
+  if (!db) {
+    if (String(process.env.NETLIFY_DB_URL || '').trim()) {
+      const { openPostgres } = await import('./db-postgres.js');
+      db = openPostgres({ connectionString: process.env.NETLIFY_DB_URL });
+    } else {
+      db = open();
+    }
+  }
   const productionWithoutDemo = process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_SEED !== '1';
   if (productionWithoutDemo) {
-    removeDemoSeed(db);
+    await removeDemoSeed(db);
     const launchVerticals = String(process.env.LAUNCH_VERTICALS || '').split(',').map((value) => value.trim()).filter(Boolean);
-    if (launchVerticals.includes('subscription')) seedSubscriptionCatalog(db);
+    if (launchVerticals.includes('subscription')) await seedSubscriptionCatalog(db);
   } else {
     // Seed is idempotent and also repairs provenance on reserved legacy demo
     // rows, even when a developer database already contains other products.
-    seed(db);
+    await seed(db);
   }
   const mailer = suppliedMailer || createMailer(db, {
     deliveryGuard: (context) => catalogNotificationDeliveryAllowed(db, context),
@@ -501,29 +527,48 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   // A single office, school, or household NAT must not make unrelated signed-in
   // customers consume one another's write budget. Anonymous traffic remains
   // IP-scoped and sensitive routes retain their tighter dedicated limiters.
-  const writeLimiter = new RateLimiter({ capacity: 60, refillPerSec: 1 });
-  const b2bLimiter = new RateLimiter({ capacity: 30, refillPerSec: 0.5 });
-  const authLimiter = new RateLimiter({ capacity: 5, refillPerSec: 1 / 720 });
-  const authIpLimiter = new RateLimiter({
+  const writeRate = { capacity: 60, refillPerSec: 1 };
+  const writeLimiter = new RateLimiter(writeRate);
+  const b2bRate = { capacity: 30, refillPerSec: 0.5 };
+  const b2bLimiter = new RateLimiter(b2bRate);
+  const authEmailRate = { capacity: 5, refillPerSec: 1 / 720 };
+  const authLimiter = new RateLimiter(authEmailRate);
+  const authIpRate = {
     capacity: Math.min(20, Math.max(1, Number(process.env.AUTH_EMAIL_IP_BURST) || 5)),
     refillPerSec: 1 / Math.min(86_400, Math.max(60, Number(process.env.AUTH_EMAIL_IP_REFILL_SECONDS) || 1800)),
-  });
+  };
+  const authIpLimiter = new RateLimiter(authIpRate);
+  const notificationEmailRate = { capacity: 5, refillPerSec: 1 / 720 };
+  const notificationEmailLimiter = new RateLimiter(notificationEmailRate);
+  const notificationIpRate = {
+    capacity: Math.min(100, Math.max(5, Number(process.env.NOTIFICATION_EMAIL_IP_BURST) || 20)),
+    refillPerSec: 1 / Math.min(86_400, Math.max(60, Number(process.env.NOTIFICATION_EMAIL_IP_REFILL_SECONDS) || 1800)),
+  };
+  const notificationIpLimiter = new RateLimiter(notificationIpRate);
   // The email-only alert endpoint is retired in production. Its local-only
   // compatibility path gets a separate, still-bounded IP budget so exercising
   // old clients cannot consume the real passwordless sign-in budget.
-  const legacyOptInIpLimiter = new RateLimiter({
+  const legacyOptInIpRate = {
     capacity: Math.min(100, Math.max(1, Number(process.env.LEGACY_OPT_IN_IP_BURST) || 20)),
     refillPerSec: 1 / Math.min(86_400, Math.max(60, Number(process.env.LEGACY_OPT_IN_IP_REFILL_SECONDS) || 1800)),
-  });
-  const authGlobalLimiter = new RateLimiter({
+  };
+  const legacyOptInIpLimiter = new RateLimiter(legacyOptInIpRate);
+  const authGlobalRate = {
     capacity: Math.min(10_000, Math.max(10, Number(process.env.AUTH_EMAIL_GLOBAL_BURST) || 100)),
     refillPerSec: Math.min(10, Math.max(1 / 86_400, Number(process.env.AUTH_EMAIL_GLOBAL_DAILY_BUDGET) || 100) / 86_400),
     maxBuckets: 2,
-  });
-  const accountSearchLimiter = new RateLimiter({
+  };
+  const authGlobalLimiter = new RateLimiter(authGlobalRate);
+  const accountSearchRate = {
     capacity: Math.min(120, Math.max(1, Number(process.env.ACCOUNT_SEARCH_BURST) || 10)),
     refillPerSec: 1 / Math.min(3600, Math.max(1, Number(process.env.ACCOUNT_SEARCH_REFILL_SECONDS) || 30)),
-  });
+  };
+  const accountSearchLimiter = new RateLimiter(accountSearchRate);
+  const tokenMutationRate = {
+    capacity: Math.min(120, Math.max(2, Number(process.env.TOKEN_MUTATION_BURST) || 20)),
+    refillPerSec: 1 / Math.min(3600, Math.max(1, Number(process.env.TOKEN_MUTATION_REFILL_SECONDS) || 60)),
+  };
+  const tokenMutationLimiter = new RateLimiter(tokenMutationRate);
   const webhookBudgetCapacity = Math.min(1000, Math.max(1, Number(process.env.WEBHOOK_BURST) || 100));
   const webhookBudgetRefillPerSecond = Math.min(100, Math.max(0.1, Number(process.env.WEBHOOK_REFILL_PER_SECOND) || 5));
   const webhookBudget = new RateLimiter({
@@ -531,14 +576,12 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     refillPerSec: webhookBudgetRefillPerSecond,
     maxBuckets: 2,
   });
-  const stripeWebhookPreauthLimiter = new RateLimiter({
+  const webhookPreauthRate = {
     capacity: Math.min(1000, Math.max(2, Number(process.env.WEBHOOK_PREAUTH_BURST) || 30)),
     refillPerSec: Math.min(20, Math.max(0.1, Number(process.env.WEBHOOK_PREAUTH_REFILL_PER_SECOND) || 1)),
-  });
-  const emailWebhookPreauthLimiter = new RateLimiter({
-    capacity: Math.min(1000, Math.max(2, Number(process.env.WEBHOOK_PREAUTH_BURST) || 30)),
-    refillPerSec: Math.min(20, Math.max(0.1, Number(process.env.WEBHOOK_PREAUTH_REFILL_PER_SECOND) || 1)),
-  });
+  };
+  const stripeWebhookPreauthLimiter = new RateLimiter(webhookPreauthRate);
+  const emailWebhookPreauthLimiter = new RateLimiter(webhookPreauthRate);
   const webhookPreauthActive = new Map();
   const providerCache = new Map();
   const webhookConcurrencyLimit = Math.min(64, Math.max(1, Number(process.env.WEBHOOK_MAX_CONCURRENCY) || 8));
@@ -557,23 +600,18 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   const productionVerticals = process.env.NODE_ENV === 'production' && launchConfig.supplied ? launchConfig.verticals : VERTICALS;
   const runtimeSearchVerticals = SEARCH_VERTICALS.filter((vertical) => productionVerticals.includes(vertical));
 
-  function readinessReport() {
-    const database = db.checkReady();
+  async function readinessReport() {
+    const database = await db.checkReady();
     const email = mailer.readiness();
     const paidLaunch = billing.readiness({ email, database, priceCatalog: priceCatalogVerification });
-    const billingReconciliation = db.billingReconciliationMetrics();
+    const billingReconciliation = await db.billingReconciliationMetrics();
     const emailRequired = process.env.REQUIRE_EMAIL === '1';
     const accountsRequested = process.env.NODE_ENV !== 'production'
       ? process.env.ENABLE_ACCOUNTS !== '0'
       : process.env.ENABLE_ACCOUNTS === '1';
     let canonicalOrigin = true;
     if (process.env.NODE_ENV === 'production') {
-      try {
-        const canonical = new URL(process.env.PUBLIC_BASE_URL || '');
-        const publicHttps = canonical.protocol === 'https:' && isPublicHostname(canonical.hostname);
-        canonicalOrigin = publicHttps && !canonical.username && !canonical.password &&
-          (canonical.pathname === '' || canonical.pathname === '/') && !canonical.search && !canonical.hash;
-      } catch { canonicalOrigin = false; }
+      canonicalOrigin = isPublicHttpsOrigin(process.env.PUBLIC_BASE_URL);
     }
     const legal = paidLaunch.checks;
     const accountChecks = {
@@ -582,7 +620,8 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       durableDatabase: process.env.NODE_ENV !== 'production' || paidLaunch.checks.durableDbConfigured,
       transactionalEmail: process.env.NODE_ENV !== 'production' || (
         paidLaunch.checks.transactionalEmail && paidLaunch.checks.resendApiKey && paidLaunch.checks.emailFrom &&
-        paidLaunch.checks.outboxEncryption && paidLaunch.checks.emailWebhookSecret && paidLaunch.checks.workerEnabled
+        paidLaunch.checks.outboxEncryption && paidLaunch.checks.emailWebhookSecret && paidLaunch.checks.workerEnabled &&
+        paidLaunch.checks.workerDispatchSecret
       ),
       approvedLegal: process.env.NODE_ENV !== 'production' || Boolean(
         legal.legalOperator && legal.legalJurisdiction && legal.legalSupport && legal.legalEffectiveDate && legal.legalApproved && legal.legalTermsVersion
@@ -609,10 +648,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     }
     let retailProvider = true;
     if (requireLaunchSources && productionVerticals.includes('retail')) {
-      try {
-        const retail = new URL(process.env.RETAIL_API_URL || '');
-        retailProvider = retail.protocol === 'https:' && Boolean(process.env.RETAIL_API_KEY);
-      } catch { retailProvider = false; }
+      retailProvider = isPublicHttpsUrl(process.env.RETAIL_API_URL) && Boolean(process.env.RETAIL_API_KEY);
     }
     const launchVerticalsOk = launchConfig.unknown.length === 0 && amadeusProductionHost && retailProvider &&
       (!requireLaunchSources || (launchConfig.supplied && productionVerticals.length > 0 && productionVerticals.every((vertical) => providerStates[vertical]?.truthUsable)));
@@ -640,17 +676,25 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       productionSafety,
       capabilities: { accounts },
       webhooks: webhookTelemetry(),
-      worker: { enabled: process.env.DISABLE_WORKER !== '1' },
+      worker: {
+        enabled: process.env.DISABLE_WORKER !== '1' && (
+          process.env.WORKER_MODE !== 'netlify-background' ||
+          String(process.env.WORKER_DISPATCH_SECRET || '').length >= 32
+        ),
+        mode: process.env.WORKER_MODE === 'netlify-background' ? 'netlify-background' : 'in-process',
+        dispatchConfigured: process.env.WORKER_MODE !== 'netlify-background' ||
+          String(process.env.WORKER_DISPATCH_SECRET || '').length >= 32,
+      },
       checkedAt: new Date().toISOString(),
     };
   }
 
-  const initialReadiness = readinessReport();
+  const initialReadiness = await readinessReport();
   if (!initialReadiness.database.ok || !initialReadiness.paidLaunch.ok || !initialReadiness.productionSafety.canonicalOrigin || !initialReadiness.productionSafety.adminToken ||
       !initialReadiness.productionSafety.launchVerticals.ok ||
       (initialReadiness.capabilities.accounts.requested && !initialReadiness.capabilities.accounts.enabled) ||
       (process.env.REQUIRE_EMAIL === '1' && !initialReadiness.email.ok)) {
-    db.close();
+    await db.close();
     const missing = [
       ...(initialReadiness.database.ok ? [] : ['databaseIntegrity']),
       ...(initialReadiness.paidLaunch.required && !initialReadiness.paidLaunch.ok
@@ -702,13 +746,13 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     ]);
   }
 
-  function currentSession(req, res, { issueCsrf = false } = {}) {
+  async function currentSession(req, res, { issueCsrf = false } = {}) {
     const cookies = parseCookies(req.headers.cookie);
-    const session = db.getSession(cookies.pt_session);
+    const session = await db.getSession(cookies.pt_session);
     if (!session) return null;
     let csrfToken = cookies.pt_csrf;
-    if (issueCsrf && !db.verifyCsrf(session, csrfToken)) {
-      csrfToken = db.rotateSessionCsrf(session.id);
+    if (issueCsrf && !await db.verifyCsrf(session, csrfToken)) {
+      csrfToken = await db.rotateSessionCsrf(session.id);
       res.setHeader('Set-Cookie', serializeCookie('pt_csrf', csrfToken, {
         maxAge: Math.max(1, Math.floor((Date.parse(session.expires_at) - Date.now()) / 1000)),
         secure: cookieSecure(req), httpOnly: false, sameSite: 'Strict',
@@ -718,19 +762,19 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     return { session, token: cookies.pt_session, csrfToken };
   }
 
-  function requireSession(req, res, { csrf = false } = {}) {
-    const auth = currentSession(req, res, { issueCsrf: !csrf });
+  async function requireSession(req, res, { csrf = false } = {}) {
+    const auth = await currentSession(req, res, { issueCsrf: !csrf });
     if (!auth) throw new HttpError(401, 'sign in is required');
     if (csrf) {
       assertSameOrigin(req, new URL(baseUrlFor(req)).origin);
       const provided = req.headers['x-csrf-token'];
-      if (!db.verifyCsrf(auth.session, provided)) throw new HttpError(403, 'invalid or missing CSRF token');
+      if (!await db.verifyCsrf(auth.session, provided)) throw new HttpError(403, 'invalid or missing CSRF token');
     }
     return auth;
   }
 
-  function requireAccountCapability() {
-    const capability = accountCapability();
+  async function requireAccountCapability() {
+    const capability = await accountCapability();
     if (!capability.enabled) {
       throw new HttpError(503, 'accounts and notifications are not enabled on this deployment', {
         code: 'CAPABILITY_UNAVAILABLE', details: { capability: 'accounts' },
@@ -738,12 +782,52 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     }
   }
 
-  function enforceEmailRequestLimits(req, res, email, { legacyOptIn = false } = {}) {
+  async function durableRateCheck(req, bucket, rate, label) {
+    if (typeof db.consumeDurableRateLimit !== 'function') return null;
+    try {
+      return await db.consumeDurableRateLimit(bucket, rate);
+    } catch (error) {
+      // Never log the bucket: it may be derived from an email or IP address.
+      // The request id and operation label are enough to correlate the full
+      // platform/database trace without leaking the protected principal.
+      const safeLabel = String(label || 'sensitive-request').replace(/[^a-z0-9_-]/gi, '?').slice(0, 64);
+      const safeRequestId = String(req.priceTruthRequestId || req.headers['x-request-id'] || 'unknown')
+        .replace(/[^a-z0-9_-]/gi, '?').slice(0, 128);
+      console.error(`[durable rate limit] ${safeLabel} request=${safeRequestId} unavailable (${error?.name || 'Error'})`);
+      throw new HttpError(503, 'request protection is temporarily unavailable; retry later', {
+        code: 'RATE_LIMIT_UNAVAILABLE',
+      });
+    }
+  }
+
+  function rejectRateLimit(res, result, message, status = 429) {
+    applyRateHeaders(res, result);
+    res.setHeader('Retry-After', String(result?.retryAfterSec || 1));
+    throw new HttpError(status, message);
+  }
+
+  async function enforceEmailRequestLimits(req, res, email, { legacyOptIn = false, notificationOptIn = false } = {}) {
+    const purpose = legacyOptIn ? 'legacy-opt-in' : notificationOptIn ? 'notification-email' : 'auth-email';
+    const emailRate = notificationOptIn ? notificationEmailRate : authEmailRate;
+    const emailLimiter = notificationOptIn ? notificationEmailLimiter : authLimiter;
+    const ipRate = legacyOptIn ? legacyOptInIpRate : notificationOptIn ? notificationIpRate : authIpRate;
+    const ipLimiter = legacyOptIn ? legacyOptInIpLimiter : notificationOptIn ? notificationIpLimiter : authIpLimiter;
     const checks = [
-      authLimiter.check(`email:${email}`),
-      (legacyOptIn ? legacyOptInIpLimiter : authIpLimiter).check(clientIp(req)),
+      emailLimiter.check(`email:${email}`),
+      ipLimiter.check(clientIp(req)),
       authGlobalLimiter.check('global'),
     ];
+    // Keep the in-memory buckets as an inexpensive first line of defense. A
+    // request that passes them is then charged to the shared database buckets,
+    // making the quota exact across cold starts and concurrently warm hosts.
+    if (checks.every((entry) => entry.ok) && typeof db.consumeDurableRateLimit === 'function') {
+      const durable = await Promise.all([
+        durableRateCheck(req, `${purpose}:email:${email}`, emailRate, 'email-address'),
+        durableRateCheck(req, `${purpose}:ip:${clientIp(req)}`, ipRate, 'email-ip'),
+        durableRateCheck(req, `${purpose}:global`, authGlobalRate, 'email-global'),
+      ]);
+      checks.push(...durable.filter(Boolean));
+    }
     const limited = checks.find((entry) => !entry.ok) || checks.reduce((lowest, entry) => entry.remaining < lowest.remaining ? entry : lowest);
     applyRateHeaders(res, limited);
     if (!checks.every((entry) => entry.ok)) {
@@ -755,9 +839,9 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   // Production capability configuration is immutable for the lifetime of the
   // process. Development retains the useful ENABLE_ACCOUNTS runtime toggle,
   // but derives it without running readiness/database probes.
-  function accountCapability() {
+  async function accountCapability() {
     if (process.env.NODE_ENV === 'production') {
-      const databaseOk = db.checkReady().ok;
+      const databaseOk = (await db.checkReady()).ok;
       return databaseOk ? initialReadiness.capabilities.accounts : {
         ...initialReadiness.capabilities.accounts,
         enabled: false,
@@ -775,7 +859,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     };
   }
 
-  function accountsEnabled() { return accountCapability().enabled; }
+  async function accountsEnabled() { return (await accountCapability()).enabled; }
 
   function webhookTelemetry() {
     const activeIpBuckets = (route) => [...webhookPreauthActive.keys()]
@@ -838,10 +922,10 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     webhookState.routes[context.route].accepted += 1;
   }
 
-  function requireLiveCommerceReady() {
+  async function requireLiveCommerceReady() {
     if (billing.mode() !== 'live') return;
-    const database = db.checkReady();
-    const reconciliation = db.billingReconciliationMetrics();
+    const database = await db.checkReady();
+    const reconciliation = await db.billingReconciliationMetrics();
     const providerStates = providerStatus();
     const unavailableVerticals = productionVerticals.filter((vertical) => providerStates[vertical]?.truthUsable !== true);
     if (!database.ok || !reconciliation.ok || unavailableVerticals.length > 0) {
@@ -869,27 +953,27 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     return vertical;
   }
 
-  function accountPayload(accountId) {
-    const account = db.getAccountById(accountId);
+  async function accountPayload(accountId) {
+    const account = await db.getAccountById(accountId);
     if (!account) return null;
-    const notification = db.getNotification(accountId);
+    const notification = await db.getNotification(accountId);
     return {
       account: publicAccount(account),
-      preferences: db.getPreferences(accountId),
+      preferences: await db.getPreferences(accountId),
       notificationSubscription: notification ? {
         channel: notification.channel, status: notification.status, verifiedAt: notification.verified_at,
         unsubscribedAt: notification.unsubscribed_at, bouncedAt: notification.bounced_at,
       } : { channel: 'email', status: 'not_configured' },
       usage: {
-        alerts: db.countAlertsForAccount(accountId),
-        watchlist: db.listWatchlist(accountId).length,
-        apiKeys: db.listApiKeys(accountId).filter((key) => !key.revoked_at).length,
+        alerts: await db.countAlertsForAccount(accountId),
+        watchlist: (await db.listWatchlist(accountId)).length,
+        apiKeys: (await db.listApiKeys(accountId)).filter((key) => !key.revoked_at).length,
       },
     };
   }
 
-  function apiAccess(accountId) {
-    const active = db.listEntitlements(accountId).filter((entry) => ['active', 'trialing'].includes(entry.status));
+  async function apiAccess(accountId) {
+    const active = (await db.listEntitlements(accountId)).filter((entry) => ['active', 'trialing'].includes(entry.status));
     const pro = active.some((entry) => entry.product === 'api:pro');
     const entitled = pro || active.some((entry) => entry.product === 'api:starter');
     const developmentBypass = process.env.ALLOW_SELF_SERVICE_API_KEYS === '1' &&
@@ -897,17 +981,25 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     return { pro, allowed: entitled || developmentBypass };
   }
 
-  async function requestEmailOptIn(req, account, { allowResubscribe = false } = {}) {
+  async function requestEmailOptIn(req, res, account, {
+    allowResubscribe = false,
+    legacyOptIn = false,
+    limitsEnforced = false,
+  } = {}) {
+    if (!limitsEnforced) await enforceEmailRequestLimits(req, res, account.email, {
+      legacyOptIn,
+      notificationOptIn: !legacyOptIn,
+    });
     const base = baseUrlFor(req);
     let tokens;
     let outbox;
-    db.transaction(() => {
-      tokens = db.createNotificationVerification(account.id, 'email', 24 * 60 * 60_000, { allowResubscribe });
+    await db.transaction(async () => {
+      tokens = await db.createNotificationVerification(account.id, 'email', 24 * 60 * 60_000, { allowResubscribe });
       if (!tokens.verifyToken || !tokens.unsubscribeToken) return;
       // The only usable raw tokens live inside the encrypted outbox payload.
       // Persist that payload in the same transaction as their hashes so a
       // crash can never strand a 24-hour pending subscription without mail.
-      outbox = db.enqueueOutbox(mailer.prepare({
+      outbox = await db.enqueueOutbox(mailer.prepare({
         accountId: account.id,
         to: account.email,
         template: 'verify-alerts',
@@ -927,23 +1019,23 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   const jobWorker = createJobWorker(db, {
     'collect-product': async ({ productId, vertical, q }) => {
       requireRuntimeVertical(vertical);
-      const product = productId ? db.getProduct(productId) : null;
+      const product = productId ? await db.getProduct(productId) : null;
       // A refresh job always targets an existing immutable product identity.
       // If deletion won the race, completing the job must be a no-op rather
       // than recreating its query as a new/global product.
       if (productId && !product) return;
-      if (product?.owner_account_id && !accountsEnabled()) return;
+      if (product?.owner_account_id && !await accountsEnabled()) return;
       if (product && product.evidence?.refreshable !== true) return;
       await runSearch(vertical, product?.evidence?.originalQuery || q, productId || null);
     },
     'deliver-email': async () => { await mailer.processPending(25); },
     'evaluate-alerts': async ({ productId, trueCents, pointAt, eligible = false, stale = true }) => {
-      if (!accountsEnabled()) return;
+      if (!await accountsEnabled()) return;
       if (!eligible || stale) return;
-      const product = db.getProduct(productId);
+      const product = await db.getProduct(productId);
       if (!product) return;
       if (!productAlertEligible(product)) return;
-      const latest = db.getLatestPoint(productId, { eligibleOnly: false });
+      const latest = await db.getLatestPoint(productId, { eligibleOnly: false });
       const latestEvidence = latest ? currentSourceEvidence({ ...product, evidence: {
         ...latest.evidence,
         refreshable: product.evidence?.refreshable === true,
@@ -951,18 +1043,18 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       if (!latest || !latest.alertEligible || latestEvidence?.provenance?.alertEligible !== true ||
           latestEvidence?.provenance?.stale === true || latest.true_cents !== trueCents || latest.ts !== pointAt) return;
       const base = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
-      for (const alert of db.listEvaluableAlerts(productId)) {
+      for (const alert of await db.listEvaluableAlerts(productId)) {
         const triggerKey = `${productId}:${pointAt}:${trueCents}`;
         let evaluation;
         let outbox;
-        db.transaction(() => {
-          evaluation = db.evaluateAlertCondition(alert.id, trueCents, triggerKey, pointAt);
+        await db.transaction(async () => {
+          evaluation = await db.evaluateAlertCondition(alert.id, trueCents, triggerKey, pointAt);
           if (!evaluation.notify) return;
-          const unsubscribeToken = db.createAlertUnsubscribeToken(alert.account_id, alert.id);
+          const unsubscribeToken = await db.createAlertUnsubscribeToken(alert.account_id, alert.id);
           // The threshold state, unsubscribe capability, and durable message
           // are one commit. A failed enqueue rolls the crossing back so the
           // leased job can retry without losing a paid alert.
-          outbox = db.enqueueOutbox(mailer.prepare({
+          outbox = await db.enqueueOutbox(mailer.prepare({
             accountId: alert.account_id, to: alert.account_email, template: 'price-alert',
             metadata: {
               alertId: alert.id, triggerKey, productId, pointAt, trueCents,
@@ -983,32 +1075,33 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       }
     },
     'weekly-digest': async ({ accountId, week }) => {
-      if (!accountsEnabled()) return;
-      if (!db.isWeeklyDigestEligible(accountId)) return;
-      const account = db.getAccountById(accountId);
+      if (!await accountsEnabled()) return;
+      if (!await db.isWeeklyDigestEligible(accountId)) return;
+      const account = await db.getAccountById(accountId);
       if (!account) return;
       const base = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
-      const watchlist = db.listWatchlist(accountId).slice(0, 20);
+      const watchlist = (await db.listWatchlist(accountId)).slice(0, 20);
       let includesFreshSubscriptionCatalog = false;
       const productSnapshots = [];
-      const items = watchlist.flatMap((product) => {
-        const latest = db.getLatestPoint(product.product_id, { eligibleOnly: false });
+      const items = [];
+      for (const product of watchlist) {
+        const latest = await db.getLatestPoint(product.product_id, { eligibleOnly: false });
         const latestEvidence = latest ? currentSourceEvidence({ ...product, evidence: {
           ...latest.evidence,
           refreshable: product.evidence?.refreshable === true,
         } }) : null;
         if (!productAlertEligible(product) || !latest?.alertEligible ||
-            latestEvidence?.provenance?.alertEligible !== true || latestEvidence?.provenance?.stale === true) return [];
+            latestEvidence?.provenance?.alertEligible !== true || latestEvidence?.provenance?.stale === true) continue;
         if (product.vertical === 'subscription') includesFreshSubscriptionCatalog = true;
         productSnapshots.push({ productId: product.product_id, pointAt: latest.ts, trueCents: latest.true_cents });
-        return [{
+        items.push({
           name: product.name,
           currentPrice: new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(latest.true_cents / 100),
           link: `${base}/p/${encodeURIComponent(product.product_id)}`,
-        }];
-      });
+        });
+      }
       if (items.length === 0) return;
-      const unsubscribeToken = db.createNotificationUnsubscribeToken(accountId);
+      const unsubscribeToken = await db.createNotificationUnsubscribeToken(accountId);
       if (!unsubscribeToken) return;
       await mailer.enqueue({
         accountId, to: account.email, template: 'weekly-digest',
@@ -1019,29 +1112,29 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     },
   });
 
-  // Sweep idle rate-limit buckets every 5 min so an idle IP is dropped from
-  // memory within ~15 min of its last request (prune evicts buckets idle >10
-  // min) — this is what makes the privacy policy's "held only transiently" true
-  // even at low traffic, not just under saturation. unref() so it never keeps
-  // the process alive.
-  const sweep = setInterval(() => {
+  // Kept as callable work units so request-scoped hosts can run them from
+  // scheduled functions without relying on a frozen setInterval callback.
+  async function runMaintenance() {
     readLimiter.prune();
     writeLimiter.prune();
     b2bLimiter.prune();
     authLimiter.prune();
     authIpLimiter.prune();
+    notificationEmailLimiter.prune();
+    notificationIpLimiter.prune();
     legacyOptInIpLimiter.prune();
     accountSearchLimiter.prune();
+    tokenMutationLimiter.prune();
     stripeWebhookPreauthLimiter.prune();
     emailWebhookPreauthLimiter.prune();
-    db.prunePendingKeys(); // drop unclaimed once-shown keys after their TTL
-    db.pruneAuth();
-    db.pruneOperationalData({
+    await db.prunePendingKeys(); // drop unclaimed once-shown keys after their TTL
+    await db.pruneAuth();
+    await db.pruneOperationalData({
       completedJobDays: Math.max(1, Number(process.env.JOB_RETENTION_DAYS) || 14),
       deliveryEventDays: Math.max(1, Number(process.env.DELIVERY_EVENT_RETENTION_DAYS) || 90),
       outboxDays: Math.max(1, Number(process.env.OUTBOX_RETENTION_DAYS) || 30),
     });
-    db.pruneAllPrivateProductHistory({
+    await db.pruneAllPrivateProductHistory({
       maxPoints: Math.min(5000, Math.max(10, Number(process.env.PRIVATE_HISTORY_MAX_POINTS) || 500)),
       maxDays: Math.min(3650, Math.max(1, Number(process.env.PRIVATE_HISTORY_RETENTION_DAYS) || 365)),
     });
@@ -1052,39 +1145,84 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     // PRAGMA quick_check can freeze webhook and request handling. The startup
     // result remains cached for readiness; operators run additional checks on
     // a backup/offline copy as part of the documented maintenance workflow.
-  }, 5 * 60 * 1000);
-  if (typeof sweep.unref === 'function') sweep.unref();
+    return { providerCacheEntries: providerCache.size, completedAt: new Date().toISOString() };
+  }
 
-  const workerTimer = process.env.DISABLE_WORKER === '1' ? null : setInterval(() => {
+  async function scheduleWorkerJobs({ now = new Date() } = {}) {
     const intervalMinutes = Math.min(1440, Math.max(15, Number(process.env.COLLECTION_INTERVAL_MINUTES) || 60));
-    const bucket = Math.floor(Date.now() / (intervalMinutes * 60_000));
-    const accountProcessing = accountsEnabled();
-    for (const product of db.listTrackedProducts().filter((entry) => productionVerticals.includes(entry.vertical) && entry.evidence?.refreshable === true && (accountProcessing || !entry.owner_account_id))) {
-      db.enqueueJob('collect-product', { productId: product.id, vertical: product.vertical, q: product.name.slice(0, 120) }, {
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    if (!Number.isFinite(nowMs)) throw new TypeError('worker schedule now must be a Date or epoch milliseconds');
+    const cycleDate = new Date(nowMs);
+    const bucket = Math.floor(nowMs / (intervalMinutes * 60_000));
+    const accountProcessing = await accountsEnabled();
+    let collectionJobs = 0;
+    for (const product of (await db.listTrackedProducts()).filter((entry) => productionVerticals.includes(entry.vertical) && entry.evidence?.refreshable === true && (accountProcessing || !entry.owner_account_id))) {
+      await db.enqueueJob('collect-product', { productId: product.id, vertical: product.vertical, q: product.name.slice(0, 120) }, {
         idempotencyKey: `collect:${product.id}:${bucket}`,
       });
+      collectionJobs += 1;
     }
-    const now = new Date();
     const configuredDigestDay = Number(process.env.DIGEST_WEEKDAY_UTC);
     const digestWeekday = Number.isInteger(configuredDigestDay) ? Math.min(6, Math.max(0, configuredDigestDay)) : 1;
-    if (accountProcessing && now.getUTCDay() === digestWeekday) {
-      const thursday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    let digestJobs = 0;
+    if (accountProcessing && cycleDate.getUTCDay() === digestWeekday) {
+      const thursday = new Date(Date.UTC(cycleDate.getUTCFullYear(), cycleDate.getUTCMonth(), cycleDate.getUTCDate()));
       thursday.setUTCDate(thursday.getUTCDate() + 4 - (thursday.getUTCDay() || 7));
       const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
       const week = `${thursday.getUTCFullYear()}-W${String(Math.ceil((((thursday - yearStart) / 86_400_000) + 1) / 7)).padStart(2, '0')}`;
-      for (const account of db.listWeeklyDigestRecipients()) {
-        db.enqueueJob('weekly-digest', { accountId: account.id, week }, { idempotencyKey: `weekly-digest-job:${account.id}:${week}` });
+      for (const account of await db.listWeeklyDigestRecipients()) {
+        await db.enqueueJob('weekly-digest', { accountId: account.id, week }, { idempotencyKey: `weekly-digest-job:${account.id}:${week}` });
+        digestJobs += 1;
       }
     }
-    if (accountProcessing) mailer.processPending(25).catch((error) => console.error('[email worker]', error.message));
-    jobWorker.tick().catch((error) => console.error('[job worker]', error.message));
-  }, 5000);
+    return { collectionJobs, digestJobs };
+  }
+
+  async function drainWorkerQueues() {
+    const accountProcessing = await accountsEnabled();
+    const errors = [];
+    const emailPromise = accountProcessing
+      ? mailer.processPending(25).catch((error) => {
+        console.error('[email worker]', error.message);
+        errors.push({ worker: 'email', message: error.message });
+        return null;
+      })
+      : Promise.resolve(null);
+    const jobsPromise = jobWorker.tick().catch((error) => {
+      console.error('[job worker]', error.message);
+      errors.push({ worker: 'jobs', message: error.message });
+      return [];
+    });
+    const [email, jobs] = await Promise.all([emailPromise, jobsPromise]);
+    return { email, jobs, errors, completedAt: new Date().toISOString() };
+  }
+
+  async function runWorkerCycle({ now = new Date() } = {}) {
+    const scheduled = await scheduleWorkerJobs({ now });
+    const drained = await drainWorkerQueues();
+    return { ...scheduled, ...drained };
+  }
+
+  // Sweep idle rate-limit buckets every 5 min so an idle IP is dropped from
+  // memory within ~15 min of its last request (prune evicts buckets idle >10
+  // min) — this is what makes the privacy policy's "held only transiently" true
+  // even at low traffic, not just under saturation. unref() so it never keeps
+  // the process alive.
+  const sweep = startTimers ? setInterval(() => {
+    runMaintenance().catch((error) => console.error('[maintenance]', error.message));
+  }, 5 * 60 * 1000) : null;
+  if (sweep && typeof sweep.unref === 'function') sweep.unref();
+
+  const workerTimer = startTimers && process.env.DISABLE_WORKER !== '1' ? setInterval(() => {
+    runWorkerCycle().catch((error) => console.error('[worker cycle]', error.message));
+  }, 5000) : null;
   if (workerTimer && typeof workerTimer.unref === 'function') workerTimer.unref();
 
   async function handle(req, res) {
     const started = Date.now();
     const ip = clientIp(req);
     const requestId = makeRequestId(req.headers['x-request-id']);
+    req.priceTruthRequestId = requestId;
     res.setHeader('X-Request-Id', requestId);
     applySecurityHeaders(res);
     let pathname = req.url || '/';
@@ -1133,6 +1271,15 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
           res.setHeader('Retry-After', String(preauth.retryAfterSec || 1));
           throw new HttpError(503, 'webhook receiver is busy; retry with backoff');
         }
+        const durablePreauth = await durableRateCheck(
+          req,
+          `webhook-preauth:${webhookContext.route}:${ip}`,
+          webhookPreauthRate,
+          `webhook-${webhookContext.route}-preauth`,
+        );
+        if (durablePreauth && !durablePreauth.ok) {
+          rejectRateLimit(res, durablePreauth, 'webhook receiver is busy; retry with backoff', 503);
+        }
         webhookPreauthActive.set(candidatePreauthKey, (webhookPreauthActive.get(candidatePreauthKey) || 0) + 1);
         webhookPreauthKey = candidatePreauthKey;
         webhookPreauthRoute = webhookContext.route;
@@ -1150,11 +1297,11 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         const limiter = (req.method === 'GET' && !isMockBilling) ? readLimiter : writeLimiter;
         let rateKey = ip;
         if (limiter === writeLimiter) {
-          const auth = currentSession(req, res);
+          const auth = await currentSession(req, res);
           if (auth?.session?.account_id) {
             rateKey = `account:${auth.session.account_id}`;
           } else if (typeof req.headers['x-api-key'] === 'string') {
-            const key = db.findApiKey(req.headers['x-api-key']);
+            const key = await db.findApiKey(req.headers['x-api-key']);
             if (key) rateKey = key.owner_account_id ? `account:${key.owner_account_id}` : `api-key:${key.id}`;
           } else if (isAdmin(req)) {
             rateKey = `admin:${crypto.createHash('sha256').update(req.headers['x-admin-token']).digest('hex')}`;
@@ -1166,6 +1313,30 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
           res.setHeader('Retry-After', String(rl.retryAfterSec));
           throw new HttpError(429, 'rate limit exceeded; slow down');
         }
+        if (limiter === writeLimiter && rateKey !== ip && !pathname.startsWith('/api/v1/')) {
+          const durableWrite = await durableRateCheck(req, `principal-write:${rateKey}`, writeRate, 'principal-write');
+          if (durableWrite && !durableWrite.ok) {
+            rejectRateLimit(res, durableWrite, 'rate limit exceeded; slow down');
+          }
+          applyRateHeaders(res, durableWrite);
+        }
+      }
+
+      const tokenMutation = req.method === 'POST' && [
+        '/api/auth/verify',
+        '/api/notifications/email/verify',
+        '/api/notifications/email/unsubscribe',
+        '/api/alerts/unsubscribe',
+      ].includes(pathname);
+      if (tokenMutation) {
+        const localTokenLimit = tokenMutationLimiter.check(`${pathname}:${ip}`);
+        applyRateHeaders(res, localTokenLimit);
+        if (!localTokenLimit.ok) rejectRateLimit(res, localTokenLimit, 'too many token attempts; try again later');
+        const durableTokenLimit = await durableRateCheck(req, `token-mutation:${pathname}:${ip}`, tokenMutationRate, 'token-mutation');
+        if (durableTokenLimit && !durableTokenLimit.ok) {
+          rejectRateLimit(res, durableTokenLimit, 'too many token attempts; try again later');
+        }
+        applyRateHeaders(res, durableTokenLimit);
       }
 
       if (pathname.startsWith('/api/v1/')) {
@@ -1217,12 +1388,12 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       return sendJson(res, 200, { ok: true, version: PKG.version, uptimeSeconds: Math.floor(process.uptime()) });
     }
     if (req.method === 'GET' && pathname === '/api/ready') {
-      const readiness = readinessReport();
+      const readiness = await readinessReport();
       return sendJson(res, readiness.ok ? 200 : 503, readiness);
     }
     if (req.method === 'GET' && pathname === '/api/openapi') {
       let document;
-      try { document = fs.readFileSync(OPENAPI_PATH); }
+      try { document = fs.readFileSync(openapiPath); }
       catch { throw new HttpError(503, 'OpenAPI document is unavailable'); }
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -1232,7 +1403,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       return res.end(document);
     }
     if (req.method === 'GET' && pathname === '/api/meta') {
-      return sendJson(res, 200, buildMeta(readinessReport(), productionVerticals, baseUrlFor(req)));
+      return sendJson(res, 200, buildMeta(await readinessReport(), productionVerticals, baseUrlFor(req)));
     }
 
     // Tokens are emitted only in URL fragments by current email templates.
@@ -1247,15 +1418,15 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       (pathname === '/api/alerts' && req.method === 'POST') ||
       (process.env.NODE_ENV === 'production' && /^\/api\/billing\/(?:checkout|claim|portal)/.test(pathname)) ||
       (billing.mode() === 'live' && pathname.startsWith('/api/billing/'));
-    if (usesAccounts) requireAccountCapability();
+    if (usesAccounts) await requireAccountCapability();
 
     // ---- passwordless identity and session lifecycle ----
     if (req.method === 'POST' && ['/api/auth/request', '/api/auth/request-link'].includes(pathname)) {
       const body = await readJsonBody(req);
       const email = validate.email(body.email);
-      enforceEmailRequestLimits(req, res, email);
-      const account = db.getOrCreateAccount(email);
-      const authToken = db.createAuthToken(account.id);
+      await enforceEmailRequestLimits(req, res, email);
+      const account = await db.getOrCreateAccount(email);
+      const authToken = await db.createAuthToken(account.id);
       const delivery = authToken.suppressed ? { status: 'queued' } : await mailer.enqueue({
         accountId: account.id,
         to: account.email,
@@ -1279,10 +1450,10 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         throw new HttpError(400, 'sign-in verification requires application/json');
       }
       const token = validate.token((await readJsonBody(req)).token);
-      const verified = db.consumeAuthToken(token);
+      const verified = await db.consumeAuthToken(token);
       if (!verified) throw new HttpError(400, 'sign-in link is invalid, expired, or already used');
       const ttlDays = Math.min(90, Math.max(1, Number(process.env.SESSION_TTL_DAYS) || 30));
-      const session = db.createSession(verified.account_id, {
+      const session = await db.createSession(verified.account_id, {
         ttlMs: ttlDays * 86_400_000,
         userAgent: String(req.headers['user-agent'] || '').slice(0, 500), ip: clientIp(req),
       });
@@ -1290,35 +1461,35 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       return sendJson(res, 200, { authenticated: true, csrfToken: session.csrfToken, account: publicAccount(verified.account) });
     }
     if (req.method === 'GET' && pathname === '/api/session') {
-      const auth = currentSession(req, res, { issueCsrf: true });
+      const auth = await currentSession(req, res, { issueCsrf: true });
       if (!auth) return sendJson(res, 200, { authenticated: false });
       return sendJson(res, 200, { authenticated: true, csrfToken: auth.csrfToken, account: publicAccount(auth.session) });
     }
     if (req.method === 'DELETE' && pathname === '/api/session') {
-      const auth = requireSession(req, res, { csrf: true });
-      db.revokeSession(auth.token);
+      const auth = await requireSession(req, res, { csrf: true });
+      await db.revokeSession(auth.token);
       clearAuthCookies(req, res);
       return sendJson(res, 200, { authenticated: false });
     }
 
     // ---- account-owned data ----
     if (req.method === 'GET' && pathname === '/api/account') {
-      const auth = requireSession(req, res);
-      return sendJson(res, 200, accountPayload(auth.session.account_id));
+      const auth = await requireSession(req, res);
+      return sendJson(res, 200, await accountPayload(auth.session.account_id));
     }
     if (req.method === 'PATCH' && pathname === '/api/account/preferences') {
-      const auth = requireSession(req, res, { csrf: true });
+      const auth = await requireSession(req, res, { csrf: true });
       const body = await readJsonBody(req);
       const patch = {};
       if (body.email_alerts !== undefined) patch.email_alerts = validate.bool(body.email_alerts, 'email_alerts');
       if (body.weekly_digest !== undefined) patch.weekly_digest = validate.bool(body.weekly_digest, 'weekly_digest');
       if (body.timezone !== undefined) patch.timezone = validate.timezone(body.timezone);
       if (Object.keys(patch).length === 0) throw new HttpError(400, 'provide at least one preference');
-      return sendJson(res, 200, { preferences: db.updatePreferences(auth.session.account_id, patch) });
+      return sendJson(res, 200, { preferences: await db.updatePreferences(auth.session.account_id, patch) });
     }
     if (req.method === 'GET' && pathname === '/api/account/watchlist') {
-      const auth = requireSession(req, res);
-      const items = db.listWatchlist(auth.session.account_id).map((row) => {
+      const auth = await requireSession(req, res);
+      const items = (await db.listWatchlist(auth.session.account_id)).map((row) => {
         const evidence = currentSourceEvidence(row);
         return {
           product_id: row.product_id,
@@ -1335,18 +1506,18 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       return sendJson(res, 200, { items });
     }
     if (req.method === 'POST' && pathname === '/api/account/watchlist') {
-      const auth = requireSession(req, res, { csrf: true });
+      const auth = await requireSession(req, res, { csrf: true });
       const body = await readJsonBody(req);
       const productId = validate.id(body.product_id, 'product_id');
-      const visibleProduct = db.getVisibleProduct(productId, auth.session.account_id);
+      const visibleProduct = await db.getVisibleProduct(productId, auth.session.account_id);
       if (!visibleProduct || !productionVerticals.includes(visibleProduct.vertical)) throw new HttpError(404, 'unknown product');
-      const row = db.addWatchlist(auth.session.account_id, productId);
-      const tracked = db.getVisibleProduct(productId, auth.session.account_id);
+      const row = await db.addWatchlist(auth.session.account_id, productId);
+      const tracked = await db.getVisibleProduct(productId, auth.session.account_id);
       const trackedEvidence = currentSourceEvidence(tracked);
       if (trackedEvidence?.refreshable === true && trackedEvidence?.provenance?.stale !== true) {
         const intervalMinutes = Math.min(1440, Math.max(15, Number(process.env.COLLECTION_INTERVAL_MINUTES) || 60));
         const bucket = Math.floor(Date.now() / (intervalMinutes * 60_000));
-        db.enqueueJob('collect-product', { productId, vertical: tracked.vertical, q: tracked.evidence?.originalQuery || tracked.name.slice(0, 120) }, { idempotencyKey: `collect:${productId}:${bucket}` });
+        await db.enqueueJob('collect-product', { productId, vertical: tracked.vertical, q: tracked.evidence?.originalQuery || tracked.name.slice(0, 120) }, { idempotencyKey: `collect:${productId}:${bucket}` });
       }
       return sendJson(res, 201, { created: true, item: { product_id: row.product_id, created_at: row.created_at, product: {
         id: row.product_id, name: row.name, vertical: row.vertical, url: row.url,
@@ -1357,121 +1528,124 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     }
     const watchlistMatch = pathname.match(/^\/api\/account\/watchlist\/([a-z0-9-]{1,64})$/);
     if (req.method === 'DELETE' && watchlistMatch) {
-      const auth = requireSession(req, res, { csrf: true });
-      const deleted = db.removeWatchlist(auth.session.account_id, watchlistMatch[1]);
+      const auth = await requireSession(req, res, { csrf: true });
+      const deleted = await db.removeWatchlist(auth.session.account_id, watchlistMatch[1]);
       if (!deleted) throw new HttpError(404, 'watchlist item not found');
       return sendJson(res, 200, { deleted: true });
     }
     const privateProductMatch = pathname.match(/^\/api\/account\/products\/([a-z0-9-]{1,64})$/);
     if (req.method === 'DELETE' && privateProductMatch) {
-      const auth = requireSession(req, res, { csrf: true });
-      if (!db.deletePrivateProduct(auth.session.account_id, privateProductMatch[1])) throw new HttpError(404, 'private product not found');
+      const auth = await requireSession(req, res, { csrf: true });
+      if (!await db.deletePrivateProduct(auth.session.account_id, privateProductMatch[1])) throw new HttpError(404, 'private product not found');
       return sendJson(res, 200, { deleted: true });
     }
     if (req.method === 'GET' && pathname === '/api/account/alerts') {
-      const auth = requireSession(req, res);
-      const premium = db.isPremium(auth.session.account_id);
-      return sendJson(res, 200, { alerts: db.listAlerts(auth.session.account_id), limit: premium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT, plan: premium ? 'premium' : 'free' });
+      const auth = await requireSession(req, res);
+      const premium = await db.isPremium(auth.session.account_id);
+      return sendJson(res, 200, { alerts: await db.listAlerts(auth.session.account_id), limit: premium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT, plan: premium ? 'premium' : 'free' });
     }
     if (req.method === 'POST' && pathname === '/api/account/alerts') {
-      const auth = requireSession(req, res, { csrf: true });
+      const auth = await requireSession(req, res, { csrf: true });
       const body = await readJsonBody(req);
       const productId = validate.id(body.product_id, 'product_id');
       const threshold = validate.cents(body.threshold_cents, 'threshold_cents');
-      const alertProduct = db.getVisibleProduct(productId, auth.session.account_id);
+      const alertProduct = await db.getVisibleProduct(productId, auth.session.account_id);
       if (!alertProduct || !productionVerticals.includes(alertProduct.vertical)) throw new HttpError(404, 'unknown product');
       if (!productAlertEligible(alertProduct)) throw new HttpError(409, 'alerts require a fresh, verified source with a stable refresh identity');
-      const premium = db.isPremium(auth.session.account_id);
+      const premium = await db.isPremium(auth.session.account_id);
       const limit = premium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT;
-      if (db.countAlertsForAccount(auth.session.account_id) >= limit) throw new HttpError(402, premium ? `premium accounts are limited to ${limit} alerts` : 'free accounts get 1 price alert');
-      const account = db.getAccountById(auth.session.account_id);
-      const notification = db.getNotification(account.id);
+      if (await db.countAlertsForAccount(auth.session.account_id) >= limit) throw new HttpError(402, premium ? `premium accounts are limited to ${limit} alerts` : 'free accounts get 1 price alert');
+      const account = await db.getAccountById(auth.session.account_id);
+      const notification = await db.getNotification(account.id);
       if (notification && ['bounced', 'complained'].includes(notification.status)) {
         throw new HttpError(409, 'email delivery is suppressed; contact support before creating alerts');
       }
       const status = notification?.status === 'active' ? 'active' : 'pending';
-      const alert = db.createAlert({ email: account.email, accountId: account.id, productId, threshold_cents: threshold, status });
-      const delivery = status === 'pending' ? await requestEmailOptIn(req, account, { allowResubscribe: notification?.status === 'unsubscribed' }) : null;
+      if (status === 'pending') await enforceEmailRequestLimits(req, res, account.email, { notificationOptIn: true });
+      const alert = await db.createAlert({ email: account.email, accountId: account.id, productId, threshold_cents: threshold, status });
+      const delivery = status === 'pending' ? await requestEmailOptIn(req, res, account, {
+        allowResubscribe: notification?.status === 'unsubscribed', limitsEnforced: true,
+      }) : null;
       return sendJson(res, 201, { created: true, alert, verificationDelivery: delivery && { status: delivery.status } });
     }
     const alertMatch = pathname.match(/^\/api\/account\/alerts\/(\d+)$/);
     if (req.method === 'PATCH' && alertMatch) {
-      const auth = requireSession(req, res, { csrf: true });
+      const auth = await requireSession(req, res, { csrf: true });
       const body = await readJsonBody(req), patch = {};
       if (body.threshold_cents !== undefined) patch.threshold_cents = validate.cents(body.threshold_cents, 'threshold_cents');
       if (body.status !== undefined) patch.status = validate.enum(body.status, 'status', ['active', 'paused']);
-      const alert = db.updateAlert(auth.session.account_id, Number(alertMatch[1]), patch);
+      const alert = await db.updateAlert(auth.session.account_id, Number(alertMatch[1]), patch);
       if (!alert) throw new HttpError(404, 'alert not found');
       return sendJson(res, 200, { alert });
     }
     if (req.method === 'DELETE' && alertMatch) {
-      const auth = requireSession(req, res, { csrf: true });
-      if (!db.deleteAlert(auth.session.account_id, Number(alertMatch[1]))) throw new HttpError(404, 'alert not found');
+      const auth = await requireSession(req, res, { csrf: true });
+      if (!await db.deleteAlert(auth.session.account_id, Number(alertMatch[1]))) throw new HttpError(404, 'alert not found');
       return sendJson(res, 200, { deleted: true });
     }
     if (req.method === 'POST' && pathname === '/api/account/notifications/email/request') {
-      const auth = requireSession(req, res, { csrf: true });
-      const delivery = await requestEmailOptIn(req, db.getAccountById(auth.session.account_id), { allowResubscribe: true });
+      const auth = await requireSession(req, res, { csrf: true });
+      const delivery = await requestEmailOptIn(req, res, await db.getAccountById(auth.session.account_id), { allowResubscribe: true });
       return sendJson(res, 202, { accepted: true, delivery: { status: delivery.status } });
     }
     if (req.method === 'POST' && pathname === '/api/notifications/email/verify') {
-      const subscription = db.verifyNotification(validate.token((await readJsonBody(req)).token));
+      const subscription = await db.verifyNotification(validate.token((await readJsonBody(req)).token));
       if (!subscription) throw new HttpError(400, 'verification link is invalid, expired, or already used');
       return sendJson(res, 200, { verified: true, channel: subscription.channel, status: subscription.status });
     }
     if (req.method === 'POST' && pathname === '/api/notifications/email/unsubscribe') {
-      const subscription = db.unsubscribeNotification(validate.token((await readJsonBody(req)).token));
+      const subscription = await db.unsubscribeNotification(validate.token((await readJsonBody(req)).token));
       if (!subscription) throw new HttpError(400, 'unsubscribe link is invalid');
       return sendJson(res, 200, { unsubscribed: true, channel: subscription.channel, status: subscription.status });
     }
     if (req.method === 'POST' && pathname === '/api/alerts/unsubscribe') {
-      const alert = db.unsubscribeAlert(validate.token((await readJsonBody(req)).token));
+      const alert = await db.unsubscribeAlert(validate.token((await readJsonBody(req)).token));
       if (!alert) throw new HttpError(400, 'unsubscribe link is invalid');
       return sendJson(res, 200, { unsubscribed: true, alertId: alert.id, status: alert.status });
     }
 
     if (req.method === 'GET' && pathname === '/api/account/api-keys') {
-      const auth = requireSession(req, res);
-      return sendJson(res, 200, { keys: db.listApiKeys(auth.session.account_id) });
+      const auth = await requireSession(req, res);
+      return sendJson(res, 200, { keys: await db.listApiKeys(auth.session.account_id) });
     }
     if (req.method === 'POST' && pathname === '/api/account/api-keys') {
-      const auth = requireSession(req, res, { csrf: true });
-      const body = await readJsonBody(req), account = db.getAccountById(auth.session.account_id);
-      const access = apiAccess(account.id);
+      const auth = await requireSession(req, res, { csrf: true });
+      const body = await readJsonBody(req), account = await db.getAccountById(auth.session.account_id);
+      const access = await apiAccess(account.id);
       if (!access.allowed) throw new HttpError(403, 'an active API subscription is required');
-      if (db.listApiKeys(account.id).filter((key) => !key.revoked_at).length >= 5) throw new HttpError(409, 'revoke an existing key before creating another');
+      if ((await db.listApiKeys(account.id)).filter((key) => !key.revoked_at).length >= 5) throw new HttpError(409, 'revoke an existing key before creating another');
       const tier = validate.enum(body.tier || (access.pro ? 'pro' : 'starter'), 'tier', access.pro ? ['starter', 'pro'] : ['starter']);
       const label = validate.string(body.label, 'label', 100);
-      const { key, record } = db.createApiKeyRecord(label, tier, { ownerEmail: account.email, ownerAccountId: account.id });
+      const { key, record } = await db.createApiKeyRecord(label, tier, { ownerEmail: account.email, ownerAccountId: account.id });
       return sendJson(res, 201, { key, record, note: 'shown once; only a hash is stored' });
     }
     const keyMatch = pathname.match(/^\/api\/account\/api-keys\/(\d+)$/);
     const rotateMatch = pathname.match(/^\/api\/account\/api-keys\/(\d+)\/rotate$/);
     if (req.method === 'POST' && rotateMatch) {
-      const auth = requireSession(req, res, { csrf: true });
-      if (!apiAccess(auth.session.account_id).allowed) throw new HttpError(403, 'an active API subscription is required');
+      const auth = await requireSession(req, res, { csrf: true });
+      if (!(await apiAccess(auth.session.account_id)).allowed) throw new HttpError(403, 'an active API subscription is required');
       const body = await readJsonBody(req);
-      const result = db.rotateApiKey(auth.session.account_id, Number(rotateMatch[1]), { label: body.label === undefined ? null : validate.string(body.label, 'label', 100) });
+      const result = await db.rotateApiKey(auth.session.account_id, Number(rotateMatch[1]), { label: body.label === undefined ? null : validate.string(body.label, 'label', 100) });
       if (!result) throw new HttpError(404, 'active API key not found');
       return sendJson(res, 201, { ...result, note: 'replacement shown once; the previous key is revoked' });
     }
     if (req.method === 'DELETE' && keyMatch) {
-      const auth = requireSession(req, res, { csrf: true });
-      if (!db.revokeApiKey(auth.session.account_id, Number(keyMatch[1]))) throw new HttpError(404, 'active API key not found');
+      const auth = await requireSession(req, res, { csrf: true });
+      if (!await db.revokeApiKey(auth.session.account_id, Number(keyMatch[1]))) throw new HttpError(404, 'active API key not found');
       return sendJson(res, 200, { revoked: true });
     }
     if (req.method === 'POST' && pathname === '/api/account/export') {
-      const auth = requireSession(req, res, { csrf: true });
-      return sendJson(res, 200, db.exportAccount(auth.session.account_id));
+      const auth = await requireSession(req, res, { csrf: true });
+      return sendJson(res, 200, await db.exportAccount(auth.session.account_id));
     }
     if (req.method === 'DELETE' && pathname === '/api/account') {
-      const auth = requireSession(req, res, { csrf: true });
+      const auth = await requireSession(req, res, { csrf: true });
       const body = await readJsonBody(req);
       if (body.confirm !== 'DELETE') throw new HttpError(400, 'confirm must equal DELETE');
-      const active = db.listActivePaidEntitlements(auth.session.account_id);
-      const pending = db.listPendingCheckoutIntents(auth.session.account_id);
-      const account = db.getAccountById(auth.session.account_id);
-      const reconciliation = db.listPendingBillingReconciliation(auth.session.account_id, account?.stripe_customer || null);
+      const active = await db.listActivePaidEntitlements(auth.session.account_id);
+      const pending = await db.listPendingCheckoutIntents(auth.session.account_id);
+      const account = await db.getAccountById(auth.session.account_id);
+      const reconciliation = await db.listPendingBillingReconciliation(auth.session.account_id, account?.stripe_customer || null);
       if (active.length || pending.length || reconciliation.length) {
         const deletionBlock = active.length
           ? 'cancel active billing in the customer portal before deleting this account'
@@ -1489,7 +1663,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
           },
         });
       }
-      if (!db.deleteAccount(auth.session.account_id)) throw new HttpError(409, 'account cannot be deleted while billing work is pending');
+      if (!await db.deleteAccount(auth.session.account_id)) throw new HttpError(409, 'account cannot be deleted while billing work is pending');
       clearAuthCookies(req, res);
       return sendJson(res, 200, { deleted: true });
     }
@@ -1503,27 +1677,27 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const availableVerticals = productionWithoutDemo
         ? productionVerticals.filter((vertical) => providerStatus()[vertical]?.truthUsable === true)
         : productionVerticals;
-      const total = db.countPublicProducts(availableVerticals);
-      const items = db.listPublicProducts(limit, offset, availableVerticals).map((p) => productPayload(db, p));
+      const total = await db.countPublicProducts(availableVerticals);
+      const items = await Promise.all((await db.listPublicProducts(limit, offset, availableVerticals)).map((p) => productPayload(db, p)));
       return sendJson(res, 200, { products: items, pagination: { limit, offset, total, nextOffset: offset + items.length < total ? offset + items.length : null } });
     }
     const productMatch = pathname.match(/^\/api\/products\/([a-z0-9-]{1,64})$/);
     if (req.method === 'GET' && productMatch) {
-      const auth = accountsEnabled() ? currentSession(req, res) : null;
-      const product = db.getVisibleProduct(productMatch[1], auth?.session.account_id || null);
+      const auth = await accountsEnabled() ? await currentSession(req, res) : null;
+      const product = await db.getVisibleProduct(productMatch[1], auth?.session.account_id || null);
       if (!product || !productionVerticals.includes(product.vertical)) throw new HttpError(404, 'unknown product');
       requireRuntimeVertical(product.vertical);
       const days = url.searchParams.get('days') === '90' ? 90 : 30;
-      return sendJson(res, 200, productPayload(db, product, { days, includeHistory: true }));
+      return sendJson(res, 200, await productPayload(db, product, { days, includeHistory: true }));
     }
     const historyMatch = pathname.match(/^\/api\/history\/([a-z0-9-]{1,64})$/);
     if (req.method === 'GET' && historyMatch) {
-      const auth = accountsEnabled() ? currentSession(req, res) : null;
-      const product = db.getVisibleProduct(historyMatch[1], auth?.session.account_id || null);
+      const auth = await accountsEnabled() ? await currentSession(req, res) : null;
+      const product = await db.getVisibleProduct(historyMatch[1], auth?.session.account_id || null);
       if (!product || !productionVerticals.includes(product.vertical)) throw new HttpError(404, 'unknown product');
       requireRuntimeVertical(product.vertical);
       const days = url.searchParams.get('days') === '90' ? 90 : 30;
-      const current = productPayload(db, product, { days, includeHistory: true });
+      const current = await productPayload(db, product, { days, includeHistory: true });
       const stats = current.stats ? Object.fromEntries(Object.entries(current.stats).filter(([key]) => key !== 'days')) : null;
       return sendJson(res, 200, { points: current.history, stats, days });
     }
@@ -1533,16 +1707,16 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       }
       const body = await readJsonBody(req);
       const email = validate.email(body.email);
-      enforceEmailRequestLimits(req, res, email, { legacyOptIn: true });
+      await enforceEmailRequestLimits(req, res, email, { legacyOptIn: true });
       const id = validate.id(body.product_id, 'product_id');
       const threshold = validate.cents(body.threshold_cents, 'threshold_cents');
-      const legacyProduct = db.getPublicProduct(id);
+      const legacyProduct = await db.getPublicProduct(id);
       if (!legacyProduct || !productionVerticals.includes(legacyProduct.vertical)) throw new HttpError(404, 'unknown product');
       if (!productAlertEligible(legacyProduct)) throw new HttpError(409, 'alerts require a fresh, verified source with a stable refresh identity');
       // Entitlement is the account's real plan — set by a completed checkout
       // (Stripe live) or the mock checkout flow. No client-supplied override.
-      const account = db.getOrCreateAccount(email);
-      const notification = db.getNotification(account.id);
+      const account = await db.getOrCreateAccount(email);
+      const notification = await db.getNotification(account.id);
       if (notification) {
         // Email-only compatibility callers never gain ownership merely by
         // knowing an address, and cannot append alerts to a verified,
@@ -1554,8 +1728,8 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
           note: 'Use the signed-in account alert flow to manage alerts.',
         });
       }
-      const premium = db.isPremium(email);
-      const existing = db.countAlertsForEmail(email);
+      const premium = await db.isPremium(email);
+      const existing = await db.countAlertsForEmail(email);
       const limit = premium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT;
       if (existing >= limit) {
         return sendJson(res, 402, {
@@ -1566,8 +1740,8 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       // Legacy email-only callers can request an opt-in, but do not own account
       // data merely by knowing an address. Ownership is attached only when the
       // recipient follows the verification link.
-      db.createAlert({ email, accountId: null, productId: id, threshold_cents: threshold, status: 'pending' });
-      const delivery = await requestEmailOptIn(req, account);
+      await db.createAlert({ email, accountId: null, productId: id, threshold_cents: threshold, status: 'pending' });
+      const delivery = await requestEmailOptIn(req, res, account, { legacyOptIn: true, limitsEnforced: true });
       return sendJson(res, 201, {
         created: true,
         plan: premium ? 'premium' : 'free',
@@ -1584,7 +1758,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const label = validate.string(body.label, 'label', 100);
       const tier = validate.enum(body.tier || 'starter', 'tier', Object.keys(B2B_DAILY_LIMIT));
       const canWriteHistory = body.can_write_history === undefined ? false : validate.bool(body.can_write_history, 'can_write_history');
-      return sendJson(res, 201, { key: db.createApiKey(label, tier, { canWriteHistory }), tier, canWriteHistory, note: 'shown once; only a hash is stored' });
+      return sendJson(res, 201, { key: await db.createApiKey(label, tier, { canWriteHistory }), tier, canWriteHistory, note: 'shown once; only a hash is stored' });
     }
 
     // ---- live search: fetch a real (or labeled-estimate) listing, analyze it,
@@ -1593,12 +1767,12 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const body = await readJsonBody(req);
       const vertical = validate.enum(body.vertical, 'vertical', runtimeSearchVerticals);
       const q = validate.string(body.q, 'q', 120);
-      let auth = accountsEnabled() ? currentSession(req, res) : null;
+      let auth = await accountsEnabled() ? await currentSession(req, res) : null;
       // Anonymous discovery remains tokenless. Once a valid session cookie is
       // present the same request becomes an account mutation (private product
       // creation/provider budget), so it must satisfy the normal origin+CSRF
       // boundary used by every other account write.
-      if (auth) auth = requireSession(req, res, { csrf: true });
+      if (auth) auth = await requireSession(req, res, { csrf: true });
       let trackedProductId = null;
       if (auth) {
         const perAccount = accountSearchLimiter.check(`account:${auth.session.account_id}`);
@@ -1607,12 +1781,22 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
           res.setHeader('Retry-After', String(perAccount.retryAfterSec));
           throw new HttpError(429, 'account search rate limit exceeded');
         }
+        const durableSearch = await durableRateCheck(
+          req,
+          `account-search:${auth.session.account_id}`,
+          accountSearchRate,
+          'account-search',
+        );
+        if (durableSearch && !durableSearch.ok) {
+          rejectRateLimit(res, durableSearch, 'account search rate limit exceeded');
+        }
+        applyRateHeaders(res, durableSearch);
         const cap = Math.min(10_000, Math.max(1, Number(process.env.PRIVATE_PRODUCT_LIMIT_PER_ACCOUNT) || 100));
-        const existingQuery = db.findPrivateProductByQuery(auth.session.account_id, vertical, q);
+        const existingQuery = await db.findPrivateProductByQuery(auth.session.account_id, vertical, q);
         const reusableExisting = existingQuery?.evidence?.refreshable === true &&
           typeof existingQuery.evidence?.providerIdentity === 'string' && existingQuery.evidence.providerIdentity.trim().length > 0;
         trackedProductId = reusableExisting ? existingQuery.id : null;
-        if (!reusableExisting && db.countPrivateProducts(auth.session.account_id) >= cap) {
+        if (!reusableExisting && await db.countPrivateProducts(auth.session.account_id) >= cap) {
           throw new HttpError(429, `private product limit reached (${cap}); delete an older private result before adding another`, { code: 'PRIVATE_PRODUCT_LIMIT' });
         }
       }
@@ -1621,14 +1805,14 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
 
     // ---- billing ----
     if (req.method === 'POST' && pathname === '/api/billing/checkout') {
-      requireLiveCommerceReady();
+      await requireLiveCommerceReady();
       const body = await readJsonBody(req);
       const planId = validate.enum(body.planId, 'planId', Object.keys(billing.PLANS));
       let account = null;
-      if (billing.mode() === 'live') account = db.getAccountById(requireSession(req, res, { csrf: true }).session.account_id);
+      if (billing.mode() === 'live') account = await db.getAccountById((await requireSession(req, res, { csrf: true })).session.account_id);
       else {
-        const auth = currentSession(req, res);
-        account = auth ? db.getAccountById(auth.session.account_id) : null;
+        const auth = await currentSession(req, res);
+        account = auth ? await db.getAccountById(auth.session.account_id) : null;
       }
       const email = account?.email || (body.email === undefined ? undefined : validate.email(body.email));
       let intent = null;
@@ -1646,7 +1830,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         // A recoverable subscription (past_due, unpaid, paused, or incomplete)
         // is still capable of charging again. Treat every nonterminal Stripe
         // entitlement as blocking and route changes through the portal.
-        const nonterminalEntitlements = db.listActivePaidEntitlements(account.id);
+        const nonterminalEntitlements = await db.listActivePaidEntitlements(account.id);
         const activeProducts = nonterminalEntitlements.map((entry) => entry.product);
         const conflicts = plan.kind === 'api'
           ? activeProducts.filter((entry) => entry.startsWith('api:'))
@@ -1658,7 +1842,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
             code: 'ACTIVE_SUBSCRIPTION', details: { portal: '/api/billing/portal', activeProducts: conflicts },
           });
         }
-        const pendingPlans = db.listPendingCheckoutIntents(account.id).map((entry) => entry.plan);
+        const pendingPlans = (await db.listPendingCheckoutIntents(account.id)).map((entry) => entry.plan);
         const crossPlanPending = pendingPlans.filter((entry) => entry !== planId);
         if (crossPlanPending.length) {
           // Until a signed completion links the account to one Stripe Customer,
@@ -1668,15 +1852,15 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
             code: 'CHECKOUT_PENDING', details: { pendingPlans },
           });
         }
-        db.recordTermsAcceptance(account.id, termsVersion, { source: 'live-checkout', planId });
-        intent = db.reserveCheckoutIntent(account.id, planId, { termsVersion });
+        await db.recordTermsAcceptance(account.id, termsVersion, { source: 'live-checkout', planId });
+        intent = await db.reserveCheckoutIntent(account.id, planId, { termsVersion });
         if (intent.checkout_url) return sendJson(res, 200, { url: intent.checkout_url, mock: false, mode: billing.mode(), reused: true });
       }
       const checkout = await billing.createCheckout({
         planId, email, accountId: account?.id || null, customerId: account?.stripe_customer || null,
         baseUrl: baseUrlFor(req), idempotencyKey: intent?.idempotency_key || null,
       });
-      if (intent) db.updateCheckoutIntent(intent.id, {
+      if (intent) await db.updateCheckoutIntent(intent.id, {
         sessionId: checkout.id, url: checkout.url, expiresAt: checkout.expiresAt, paymentStatus: checkout.paymentStatus,
       });
       const { url: checkoutUrl, mock } = checkout;
@@ -1686,11 +1870,11 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const sessionId = url.searchParams.get('session_id') || '';
       if (!/^[A-Za-z0-9_]{6,200}$/.test(sessionId)) throw new HttpError(400, 'invalid session_id');
       const ownershipRequired = billing.mode() !== 'mock';
-      const auth = ownershipRequired ? requireSession(req, res) : currentSession(req, res);
-      const claim = db.getCheckoutClaim(sessionId);
+      const auth = ownershipRequired ? await requireSession(req, res) : await currentSession(req, res);
+      const claim = await db.getCheckoutClaim(sessionId);
       if (claim && ownershipRequired && claim.account_id !== auth.session.account_id) throw new HttpError(404, 'checkout session not found');
       if (!claim) {
-        const intent = ownershipRequired ? db.getCheckoutIntentBySession(auth.session.account_id, sessionId) : null;
+        const intent = ownershipRequired ? await db.getCheckoutIntentBySession(auth.session.account_id, sessionId) : null;
         if (intent && ['expired', 'failed'].includes(intent.status)) {
           throw new HttpError(409, `checkout ${intent.status}; start a new checkout`, {
             code: 'CHECKOUT_TERMINAL', details: { checkoutStatus: intent.status, requiresAction: true, plan: intent.plan },
@@ -1705,13 +1889,13 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const body = await readJsonBody(req), sessionId = body.session_id || '';
       if (!/^[A-Za-z0-9_]{6,200}$/.test(sessionId)) throw new HttpError(400, 'invalid session_id');
       const ownershipRequired = billing.mode() !== 'mock';
-      const auth = ownershipRequired ? requireSession(req, res, { csrf: true }) : currentSession(req, res);
-      const claim = db.getCheckoutClaim(sessionId);
+      const auth = ownershipRequired ? await requireSession(req, res, { csrf: true }) : await currentSession(req, res);
+      const claim = await db.getCheckoutClaim(sessionId);
       if (claim && ownershipRequired && claim.account_id !== auth.session.account_id) throw new HttpError(404, 'checkout session not found');
       if (!claim) return sendJson(res, 202, { status: 'pending', complete: false, claimable: false, plan: null, tier: null });
       if (claim.status === 'claimed') throw new HttpError(409, 'the API key for this checkout was already claimed');
       if (claim.status !== 'claimable') throw new HttpError(404, 'this checkout did not create an API key');
-      const pending = db.takePendingKey(sessionId, ownershipRequired ? auth.session.account_id : undefined);
+      const pending = await db.takePendingKey(sessionId, ownershipRequired ? auth.session.account_id : undefined);
       if (!pending) throw new HttpError(409, 'the API key is no longer claimable');
       return sendJson(res, 200, { key: pending.raw_key, tier: pending.tier, plan: claim.plan, status: 'claimed', note: 'shown once; store it now' });
     }
@@ -1719,17 +1903,17 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       if (billing.mode() !== 'mock') throw new HttpError(405, 'use POST /api/billing/claim');
       const sessionId = url.searchParams.get('session_id') || '';
       if (!/^[A-Za-z0-9_]{6,200}$/.test(sessionId)) throw new HttpError(400, 'invalid session_id');
-      const pending = db.takePendingKey(sessionId);
+      const pending = await db.takePendingKey(sessionId);
       if (!pending) throw new HttpError(404, 'no key to claim for this session (already claimed or not an API purchase)');
       return sendJson(res, 200, { key: pending.raw_key, tier: pending.tier, note: 'shown once; store it now' });
     }
     if (req.method === 'POST' && pathname === '/api/billing/portal') {
       const body = await readJsonBody(req);
       let acct;
-      if (billing.mode() !== 'mock') acct = db.getAccountById(requireSession(req, res, { csrf: true }).session.account_id);
+      if (billing.mode() !== 'mock') acct = await db.getAccountById((await requireSession(req, res, { csrf: true })).session.account_id);
       else {
-        const auth = currentSession(req, res);
-        acct = auth ? db.getAccountById(auth.session.account_id) : db.getAccount(validate.email(body.email));
+        const auth = await currentSession(req, res);
+        acct = auth ? await db.getAccountById(auth.session.account_id) : await db.getAccount(validate.email(body.email));
       }
       if (!acct || !acct.stripe_customer) {
         if (billing.mode() === 'mock') return sendJson(res, 200, { url: `${baseUrlFor(req)}/billing/mock-portal`, mock: true });
@@ -1759,9 +1943,16 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       telemetry.phase = 'budget';
       const budget = webhookBudget.check('stripe');
       if (!budget.ok) throw new HttpError(503, 'billing webhook processing is busy; retry with backoff');
+      const durableBudget = await durableRateCheck(req, 'webhook-budget:billing', {
+        capacity: webhookBudgetCapacity,
+        refillPerSec: webhookBudgetRefillPerSecond,
+      }, 'webhook-billing-budget');
+      if (durableBudget && !durableBudget.ok) {
+        rejectRateLimit(res, durableBudget, 'billing webhook processing is busy; retry with backoff', 503);
+      }
       const release = beginWebhookProcessing(telemetry);
       try {
-        const result = billing.applyEvent(event, db);
+        const result = await billing.applyEvent(event, db);
         if (result.retryable) throw new HttpError(503, 'billing event is queued for reconciliation and should be retried');
         sendJson(res, 200, { received: true, ...result });
         recordWebhookAccepted(telemetry);
@@ -1784,12 +1975,19 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       telemetry.phase = 'budget';
       const budget = webhookBudget.check('email');
       if (!budget.ok) throw new HttpError(503, 'email webhook processing is busy; retry with backoff');
+      const durableBudget = await durableRateCheck(req, 'webhook-budget:email', {
+        capacity: webhookBudgetCapacity,
+        refillPerSec: webhookBudgetRefillPerSecond,
+      }, 'webhook-email-budget');
+      if (durableBudget && !durableBudget.ok) {
+        rejectRateLimit(res, durableBudget, 'email webhook processing is busy; retry with backoff', 503);
+      }
       const release = beginWebhookProcessing(telemetry);
       try {
         const type = String(event.type || '').replace(/^email\./, '');
         const data = event.data || {};
         const messageId = data.email_id || data.id || null;
-        const recorded = db.recordDeliveryEvent({
+        const recorded = await db.recordDeliveryEvent({
           provider: 'resend', providerEventId: req.headers['svix-id'] || req.headers['webhook-id'] || event.id,
           providerMessageId: messageId, type, payload: { created_at: event.created_at || null },
           occurredAt: event.created_at && !Number.isNaN(Date.parse(event.created_at)) ? new Date(event.created_at).toISOString() : new Date().toISOString(),
@@ -1798,7 +1996,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         // that attaches provider_message_id to our outbox row. Retry the mapping
         // even for a deduplicated replay; markOutboxSent also reconciles events
         // that arrived first.
-        if (['bounced', 'complained'].includes(type)) db.updateNotificationByProvider(messageId, type);
+        if (['bounced', 'complained'].includes(type)) await db.updateNotificationByProvider(messageId, type);
         sendJson(res, 200, { received: true, duplicate: !recorded });
         recordWebhookAccepted(telemetry);
         return;
@@ -1811,8 +2009,8 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     if (req.method === 'GET' && pathname === '/api/admin/metrics') {
       if (!isAdmin(req)) throw new HttpError(403, 'admin token required');
       return sendJson(res, 200, {
-        billing: { mode: billing.mode(), ...db.revenueSummary(12) },
-        usage: db.metrics(),
+        billing: { mode: billing.mode(), ...await db.revenueSummary(12) },
+        usage: await db.metrics(),
         providers: providerStatus(),
         generatedAt: new Date().toISOString(),
       });
@@ -1850,7 +2048,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     if (state?.kind === 'live') {
       const name = `PROVIDER_DAILY_BUDGET_${vertical.toUpperCase()}`;
       const dailyLimit = Math.min(1_000_000, Math.max(1, Number(process.env[name]) || Number(process.env.PROVIDER_DAILY_BUDGET) || 1000));
-      reservation = db.reserveProviderCall(vertical, dailyLimit);
+      reservation = await db.reserveProviderCall(vertical, dailyLimit);
       if (!reservation.allowed) {
         allowLive = false;
       }
@@ -1860,7 +2058,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       listing = await searchListing({ vertical, q, allowLive });
     } catch (err) {
       if (reservation?.allowed) {
-        db.recordProviderResult(vertical, {
+        await db.recordProviderResult(vertical, {
           // A verified no-match still consumed the upstream request budget,
           // but it proves the provider is reachable and must not trip the
           // availability circuit.
@@ -1872,7 +2070,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       throw err;
     }
     if (reservation?.allowed) {
-      db.recordProviderResult(vertical, {
+      await db.recordProviderResult(vertical, {
         ok: true,
         circuitFailures: Math.min(100, Math.max(1, Number(process.env.PROVIDER_CIRCUIT_FAILURES) || 5)),
         circuitMs: Math.min(60 * 60_000, Math.max(1_000, Number(process.env.PROVIDER_CIRCUIT_OPEN_SECONDS) * 1000 || 5 * 60_000)),
@@ -1886,7 +2084,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
 
   async function runSearch(vertical, q, trackedProductId = null, { ownerAccountId = null } = {}) {
     requireRuntimeVertical(vertical);
-    const existingProduct = trackedProductId ? db.getProduct(trackedProductId) : null;
+    const existingProduct = trackedProductId ? await db.getProduct(trackedProductId) : null;
     if (trackedProductId && !existingProduct) throw new HttpError(404, 'tracked product no longer exists');
     if (existingProduct && !productionVerticals.includes(existingProduct.vertical)) throw new HttpError(404, 'unknown product');
     if (existingProduct && existingProduct.evidence?.refreshable !== true) throw new HttpError(409, 'this result has no stable provider identity and cannot be refreshed');
@@ -1916,10 +2114,10 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       return { product_id: null, persisted: false, refreshable: Boolean(listing.refreshable), alertEligible: Boolean(listing.alertEligible), listing, report, stats: null, score: dealQuality({}), live: listing.provenance.observed, ...dataClassification({ source: listing.source, evidence: { provenance: listing.provenance }, observed: listing.provenance.observed }) };
     }
     const pointAt = listing.provenance?.asOf || listing.fetchedAt || new Date().toISOString();
-    const { id, stored, pointInserted } = db.transaction(() => {
+    const { id, stored, pointInserted } = await db.transaction(async () => {
       let currentProduct = existingProduct;
       if (trackedProductId) {
-        currentProduct = db.getProduct(trackedProductId);
+        currentProduct = await db.getProduct(trackedProductId);
         const sameTarget = currentProduct &&
           currentProduct.owner_account_id === existingProduct.owner_account_id &&
           currentProduct.visibility === existingProduct.visibility &&
@@ -1928,13 +2126,13 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         if (!sameTarget) throw new HttpError(409, 'tracked product changed or was deleted while refreshing');
       }
       const effectiveOwner = currentProduct?.owner_account_id || ownerAccountId;
-      if (effectiveOwner && !db.getAccountById(effectiveOwner)) {
+      if (effectiveOwner && !await db.getAccountById(effectiveOwner)) {
         throw new HttpError(409, 'the owning account was deleted while refreshing');
       }
       const id = trackedProductId || (listing.refreshable
         ? searchProductId(vertical, listing.name, q, effectiveOwner)
         : searchSnapshotProductId(vertical, q, listing, effectiveOwner));
-      db.upsertProduct({
+      await db.upsertProduct({
         id, vertical, name: listing.name, url: listing.url,
         advertised_cents: listing.advertised_cents, context: listing.context,
         source: listing.source, sourceLabel: listing.sourceLabel, certainty: listing.certainty,
@@ -1945,9 +2143,9 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         },
         visibility: currentProduct?.visibility || 'private', ownerAccountId: effectiveOwner,
       });
-      const stored = db.getProduct(id);
+      const stored = await db.getProduct(id);
       if (!stored || (effectiveOwner && stored.owner_account_id !== effectiveOwner)) throw new HttpError(409, 'private product ownership conflict');
-      const pointInserted = db.addPricePoint(id, {
+      const pointInserted = await db.addPricePoint(id, {
         ts: pointAt,
         advertised_cents: listing.advertised_cents, true_cents: report.truePrice.amount_cents,
         source: listing.source, sourceLabel: listing.sourceLabel, certainty: listing.certainty,
@@ -1957,14 +2155,14 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       });
       return { id, stored, pointInserted };
     });
-    if (stored.visibility === 'private') db.prunePrivateProductHistory(id, {
+    if (stored.visibility === 'private') await db.prunePrivateProductHistory(id, {
       maxPoints: Math.min(5000, Math.max(10, Number(process.env.PRIVATE_HISTORY_MAX_POINTS) || 500)),
       maxDays: Math.min(3650, Math.max(1, Number(process.env.PRIVATE_HISTORY_RETENTION_DAYS) || 365)),
     });
-    const stats = db.getStats(id, 90);
+    const stats = await db.getStats(id, 90);
     const score = scoreFromHistory(stats, { currentCents: report.truePrice.amount_cents, feeLoadPct: report.feeLoadPct });
     if (pointInserted && alertEligible) {
-      db.enqueueJob('evaluate-alerts', { productId: id, trueCents: report.truePrice.amount_cents, pointAt, eligible: true, stale: false }, {
+      await db.enqueueJob('evaluate-alerts', { productId: id, trueCents: report.truePrice.amount_cents, pointAt, eligible: true, stale: false }, {
         idempotencyKey: `evaluate-alerts:${id}:${pointAt}`,
       });
     }
@@ -2002,7 +2200,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   // exercisable without keys, and are clearly labeled as simulations.
   async function handleMockBilling(req, res, url, pathname) {
     if (billing.mode() !== 'mock') throw new HttpError(404, 'not found');
-    if (process.env.NODE_ENV === 'production' && !accountsEnabled()) throw new HttpError(503, 'billing simulations are disabled on this deployment');
+    if (process.env.NODE_ENV === 'production' && !await accountsEnabled()) throw new HttpError(503, 'billing simulations are disabled on this deployment');
     if (pathname === '/billing/mock-portal') {
       return sendHtml(res, 200, mockPortalHtml());
     }
@@ -2013,7 +2211,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const email = url.searchParams.get('email') || null;
       const sessionId = `cs_mock_${crypto.randomBytes(12).toString('hex')}`;
       const event = billing.mockCompletedEvent({ planId, email, sessionId });
-      billing.applyEvent(event, db);
+      await billing.applyEvent(event, db);
       // 303 back to the SPA success page, which claims any minted key.
       res.writeHead(303, { Location: `/billing/success?session_id=${sessionId}&mock=1` });
       return res.end();
@@ -2023,7 +2221,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
 
   async function handleB2b(req, res, url, pathname, ip) {
     const rawKey = req.headers['x-api-key'];
-    const key = typeof rawKey === 'string' ? db.findApiKey(rawKey) : null;
+    const key = typeof rawKey === 'string' ? await db.findApiKey(rawKey) : null;
     if (!key) throw new HttpError(401, 'missing or invalid X-API-Key');
     const rateScope = key.owner_account_id ? `account:${key.owner_account_id}` : `key:${key.id}`;
     const rl = b2bLimiter.check(`${rateScope}:${ip}`);
@@ -2032,7 +2230,12 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       res.setHeader('Retry-After', String(rl.retryAfterSec));
       throw new HttpError(429, 'per-minute rate limit exceeded');
     }
-    const usedToday = db.meterUsage(key.id);
+    const durableB2b = await durableRateCheck(req, `b2b:${rateScope}:${ip}`, b2bRate, 'b2b-api');
+    if (durableB2b && !durableB2b.ok) {
+      rejectRateLimit(res, durableB2b, 'per-minute rate limit exceeded');
+    }
+    applyRateHeaders(res, durableB2b);
+    const usedToday = await db.meterUsage(key.id);
     const limit = B2B_DAILY_LIMIT[key.tier] ?? B2B_DAILY_LIMIT.starter;
     res.setHeader('X-DailyLimit-Limit', String(limit));
     res.setHeader('X-DailyLimit-Remaining', String(Math.max(0, limit - usedToday)));
@@ -2049,7 +2252,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
       const body = await readJsonBody(req);
       const id = validate.id(body.product_id, 'product_id');
       const advertised = validate.cents(body.advertised_cents, 'advertised_cents');
-      const product = db.getPublicProduct(id);
+      const product = await db.getPublicProduct(id);
       if (!product || !productionVerticals.includes(product.vertical)) throw new HttpError(404, 'unknown product');
       // Anchor the plausibility band to the first trusted-ingestion baseline.
       // Comparing against the latest mutable price would let a scoped client
@@ -2068,19 +2271,19 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
         observed: true, degraded: false, fetchedAt: pointAt, asOf: pointAt,
         maxAgeSeconds: 3600, ageSeconds: 0, stale: false, alertEligible: pricingComplete,
       };
-      db.upsertProduct({
+      await db.upsertProduct({
         id: product.id, vertical: product.vertical, name: product.name, url: product.url,
         advertised_cents: advertised, context: product.context,
         source: provenance.source, sourceLabel: provenance.sourceLabel, certainty: 'live', fetchedAt: pointAt,
         evidence: { ...product.evidence, ingestionBaseline_cents: ingestionBaseline, provenance, alertEligible: pricingComplete, pricingComplete }, visibility: 'curated',
       });
-      const pointInserted = db.addPricePoint(id, {
+      const pointInserted = await db.addPricePoint(id, {
         ts: pointAt, advertised_cents: advertised, true_cents: report.truePrice.amount_cents,
         source: provenance.source, sourceLabel: provenance.sourceLabel, certainty: 'live',
         observed: true, alertEligible: pricingComplete, fetchedAt: pointAt, evidence: { provenance }, providerKey: `api-key:${key.id}`,
       });
       if (pointInserted && pricingComplete) {
-        db.enqueueJob('evaluate-alerts', {
+        await db.enqueueJob('evaluate-alerts', {
           productId: id, trueCents: report.truePrice.amount_cents, pointAt, eligible: true, stale: false,
         }, { idempotencyKey: `evaluate-alerts:${id}:${pointAt}` });
       }
@@ -2088,10 +2291,10 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     }
     const productMatch = pathname.match(/^\/api\/v1\/products\/([a-z0-9-]{1,64})$/);
     if (req.method === 'GET' && productMatch) {
-      const product = db.getPublicProduct(productMatch[1]);
+      const product = await db.getPublicProduct(productMatch[1]);
       if (!product || !productionVerticals.includes(product.vertical)) throw new HttpError(404, 'unknown product');
       requireRuntimeVertical(product.vertical);
-      return sendJson(res, 200, { ...productPayload(db, product, { includeHistory: true }), usage });
+      return sendJson(res, 200, { ...await productPayload(db, product, { includeHistory: true }), usage });
     }
     if (req.method === 'GET' && pathname === '/api/v1/usage') {
       return sendJson(res, 200, { usage });
@@ -2121,7 +2324,7 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
   function handleExtensionDownload(req, res) {
     if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'method not allowed');
     const origin = new URL(baseUrlFor(req)).origin;
-    const buf = buildExtensionZip(origin);
+    const buf = buildExtensionZip(origin, extensionDir);
     res.writeHead(200, {
       'Content-Type': 'application/zip',
       'Content-Length': buf.length,
@@ -2171,8 +2374,8 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     if (pathname === '/admin' || pathname === '/admin/') rel = 'admin.html';
     // SPA-friendly: extensionless paths fall through to the app shell.
     else if (!rel.includes('.')) rel = 'index.html';
-    const filePath = path.resolve(PUBLIC_DIR, rel);
-    if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
+    const filePath = path.resolve(publicDir, rel);
+    if (filePath !== publicDir && !filePath.startsWith(publicDir + path.sep)) {
       throw new HttpError(403, 'forbidden');
     }
     let stat;
@@ -2212,18 +2415,29 @@ function createApp({ dbPath, mailer: suppliedMailer, priceCatalogVerification = 
     });
   });
   server.on('close', () => {
-    clearInterval(sweep);
+    if (sweep) clearInterval(sweep);
     if (workerTimer) clearInterval(workerTimer);
   });
 
-  return { server, db, mailer, worker: jobWorker, readiness: readinessReport };
+  return {
+    server,
+    handle,
+    db,
+    mailer,
+    worker: jobWorker,
+    readiness: readinessReport,
+    runMaintenance,
+    scheduleWorkerJobs,
+    drainWorkerQueues,
+    runWorkerCycle,
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const priceCatalogVerification = billing.mode() === 'live'
     ? await billing.verifyLivePriceCatalog()
     : null;
-  const { server, db } = createApp({ priceCatalogVerification });
+  const { server, db } = await createApp({ priceCatalogVerification });
   // Bind loopback locally so a dev box is never exposed to the LAN. On a hosted
   // platform (Render/Railway/Fly/Heroku set their own PORT, and Render sets
   // RENDER=true; NODE_ENV=production is the general signal) the app MUST bind
@@ -2242,25 +2456,30 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let shuttingDown = false;
   let parentWatch = null;
   let testIdleWatch = null;
+  let dbClosePromise = null;
+  const closeDb = () => {
+    if (!dbClosePromise) dbClosePromise = Promise.resolve().then(() => db.close());
+    return dbClosePromise;
+  };
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('shutting down…');
     let forceTimer;
-    server.close(() => {
+    server.close(async () => {
       if (forceTimer) clearTimeout(forceTimer);
       if (parentWatch) clearInterval(parentWatch);
       if (testIdleWatch) clearInterval(testIdleWatch);
-      db.close();
+      try { await closeDb(); } catch (error) { console.error('[database close]', error.message); }
       process.exit(0);
     });
     // Browser clients and reverse proxies can keep HTTP/1.1 sockets alive after
     // SIGTERM. Drain idle sockets immediately, then force only the remaining
     // connections after a short grace period so deploys and test runners exit.
     server.closeIdleConnections?.();
-    forceTimer = setTimeout(() => {
+    forceTimer = setTimeout(async () => {
       server.closeAllConnections?.();
-      try { db.close(); } catch { /* graceful callback may have won the race */ }
+      try { await closeDb(); } catch { /* graceful callback may have won the race */ }
       process.exit(0);
     }, 5_000);
   };

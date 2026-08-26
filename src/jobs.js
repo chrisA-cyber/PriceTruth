@@ -8,16 +8,16 @@ function createJobWorker(db, handlers = {}, { batchSize = 10 } = {}) {
     running = true;
     const results = [];
     try {
-      for (const job of db.claimJobs(batchSize)) {
+      for (const job of await db.claimJobs(batchSize)) {
         try {
           const handler = handlers[job.type];
           if (!handler) throw new Error(`no handler registered for job type ${job.type}`);
           const payload = JSON.parse(job.payload_json);
           await handler(payload, job);
-          const completed = db.completeJob(job.id);
+          const completed = await db.completeJob(job.id, job.lease_token || null);
           results.push({ id: job.id, status: completed ? 'completed' : 'canceled' });
         } catch (error) {
-          const failed = db.failJob(job.id, error.message);
+          const failed = await db.failJob(job.id, error.message, job.lease_token || null);
           results.push({ id: job.id, status: failed ? 'failed' : 'canceled', ...(failed ? { error: error.message } : {}) });
         }
       }

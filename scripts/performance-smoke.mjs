@@ -5,7 +5,7 @@ import { createApp } from '../src/server.js';
 const limitMs = Number(process.env.PERF_P95_MS || 500);
 const originalLog = console.log;
 console.log = () => {};
-const { server, db } = createApp({ dbPath: ':memory:' });
+const { server, db } = await createApp({ dbPath: ':memory:' });
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -38,5 +38,5 @@ try {
   console.log = originalLog;
   await new Promise((resolve) => server.close(resolve));
   server.closeAllConnections();
-  db.close();
+  await db.close();
 }
