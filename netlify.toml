@@ -1,0 +1,34 @@
+[build]
+  command = "npm run build:netlify"
+  publish = "dist/netlify"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+# PriceTruth's browser application is hosted by Netlify. Dynamic requests are
+# rewritten by the generated dist/netlify/_redirects file to the durable Node
+# backend named by PRICETRUTH_BACKEND_ORIGIN. The build deliberately fails when
+# that variable is missing; silently deploying a static shell would break price
+# checks, accounts, alerts, billing, and webhooks.
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Resource-Policy = "same-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Referrer-Policy = "no-referrer"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/legal.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

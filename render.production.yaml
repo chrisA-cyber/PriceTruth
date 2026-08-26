@@ -1,0 +1,84 @@
+# Fail-closed paid-production Render blueprint. Configure every sync:false value
+# in the dashboard before the first deploy. `render.yaml` remains a demo-safe
+# free blueprint and must never receive live billing credentials. This blueprint
+# launches the subscription catalog only; add provider credentials in the same
+# reviewed change that expands LAUNCH_VERTICALS.
+services:
+  - type: web
+    name: pricetruth-production
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false
+    healthCheckPath: /api/ready
+    disk:
+      name: pricetruth-production-data
+      mountPath: /var/lib/pricetruth
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: "1"
+      - key: PRICETRUTH_DB
+        value: /var/lib/pricetruth/pricetruth.db
+      - key: DISABLE_WORKER
+        value: "0"
+      - key: REQUIRE_EMAIL
+        value: "1"
+      - key: EMAIL_TRANSPORT
+        value: resend
+      - key: ENABLE_LIVE_BILLING
+        value: "1"
+      - key: STRIPE_AUTOMATIC_TAX
+        value: "1"
+      - key: ENABLE_DEMO_SEED
+        value: "0"
+      - key: ENABLE_ACCOUNTS
+        value: "1"
+      - key: LAUNCH_VERTICALS
+        value: subscription
+      - key: SUBSCRIPTION_CATALOG_MAX_AGE_DAYS
+        value: "93"
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: LEGAL_OPERATOR_NAME
+        sync: false
+      - key: LEGAL_JURISDICTION
+        sync: false
+      - key: SUPPORT_CONTACT_URL
+        sync: false
+      - key: LEGAL_EFFECTIVE_DATE
+        sync: false
+      - key: LEGAL_APPROVED
+        sync: false
+      - key: LEGAL_TERMS_VERSION
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: OUTBOX_ENCRYPTION_KEY
+        sync: false
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PREMIUM
+        sync: false
+      - key: STRIPE_PRICE_API_STARTER
+        sync: false
+      - key: STRIPE_PRICE_API_PRO
+        sync: false
+      - key: STRIPE_PRODUCT_PREMIUM
+        sync: false
+      - key: STRIPE_PRODUCT_API_STARTER
+        sync: false
+      - key: STRIPE_PRODUCT_API_PRO
+        sync: false

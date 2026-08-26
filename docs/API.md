@@ -5,8 +5,9 @@ realistically-unavoidable fee), **price history**, and **deal-quality scores** a
 projected number is honesty-labeled: line items carry a `certainty` field, and each report
 carries `confidence` and `assumptions`.
 
-> **Prototype notice.** This documents the API as implemented in `src/server.js`. The
-> prototype serves plain HTTP on localhost and ships with clearly-labeled demo data.
+The machine-readable contract for every public, account, webhook, operator, and
+B2B route is available at `GET /api/openapi` and in `openapi/openapi.json`.
+This document focuses on the stable B2B v1 surface.
 
 ## Base URL
 
@@ -14,9 +15,9 @@ carries `confidence` and `assumptions`.
 http://localhost:4780
 ```
 
-Start the server with `npm start` (the `PORT` environment variable overrides the port). All
-v1 endpoints live under the `/api/v1/` path prefix. All requests and responses are JSON
-(`Content-Type: application/json`).
+Start the server with `npm start` (the `PORT` environment variable overrides the port).
+Production clients use the HTTPS `PUBLIC_BASE_URL` supplied by the operator. All v1
+endpoints live under `/api/v1/` and use JSON.
 
 ## Authentication
 
@@ -26,11 +27,15 @@ Every v1 request must send an API key in the `X-API-Key` header:
 X-API-Key: pt_starter_5f0pbZiUEfILdKezgjLl9G5pRZWo1oWn
 ```
 
-- **Minting keys (prototype):** run `npm run keygen -- "Acme Travel" starter` (or `pro`) on
-  the machine hosting the server. The raw key is printed **once** — store it immediately.
+- **Customer key lifecycle:** an authenticated API subscriber creates, lists,
+  rotates, and revokes keys under `/api/account/api-keys`. The raw key is shown
+  **once**—store it immediately. Rotation atomically revokes the prior key.
+- **Operator recovery:** run `npm run keygen -- "label" starter|pro` on the host,
+  or use the protected admin route. Customer self-service is preferred because
+  it preserves account ownership and an auditable lifecycle.
 - Keys look like `pt_<tier>_<32 url-safe chars>` and are stored **only as a SHA-256 hash**;
-  the server cannot recover a lost key and keys never appear in logs. Lost key = mint a new
-  one.
+  the server cannot recover a lost key and keys never appear in logs. Lost key =
+  rotate or mint a replacement and revoke the old record.
 - An optional HTTP minting route (`POST /api/admin/keys`, header `X-Admin-Token`) exists for
   operators, but it is disabled (403) unless the server was started with an `ADMIN_TOKEN`
   environment variable.
@@ -56,9 +61,10 @@ Metering semantics (exactly as enforced by the server):
 - The burst limiter is a token bucket (capacity 30, refilling at ~30/min, keyed per
   key + client IP). Exceeding it returns **429** with
   `{"error": "per-minute rate limit exceeded"}` and a `Retry-After` header (seconds).
-- Prototype-only: the server's public per-IP limits also apply on top (GET burst ~120,
-  POST burst ~20 with a slow refill from a single IP). Production would exempt keyed
-  traffic from these.
+- Public per-IP limits also apply as an abuse-control layer.
+- Limited responses expose `RateLimit-Limit`, `RateLimit-Remaining`, and
+  `RateLimit-Reset`, plus `X-RateLimit-*` compatibility fields. B2B responses
+  also expose `X-DailyLimit-Limit` and `X-DailyLimit-Remaining`.
 
 ## Conventions
 
@@ -72,10 +78,17 @@ Metering semantics (exactly as enforced by the server):
 - `currency` is always `"USD"` in v1.
 - `certainty` on each line item is one of:
   - `"listed"` — the value was supplied in your request (seller/user quoted it),
+  - `"catalog"` — the value came from an approved, dated source snapshot,
   - `"typical"` — a market/carrier/platform typical from PriceTruth's fee datasets,
   - `"estimated"` — computed heuristically (e.g. a percentage tax).
-- `confidence` (0.35–1.0) starts at 1.0 and is reduced by 0.08 per `typical` line and 0.12
-  per `estimated` line. Treat sub-1.0 reports as projections, and say so in your UI.
+- `confidence` (0.35–1.0) starts at 1.0 and is reduced by 0.04 per `catalog` line,
+  0.08 per `typical` line, 0.12 per `estimated` line, and 0.15 per unknown cost
+  (capped at a 0.45 unknown-cost penalty). Treat sub-1.0 reports as uncertain and
+  show that uncertainty in your UI.
+- `completeness.status` is `"complete"` only when no mandatory or conditional
+  checkout cost is missing. When it is `"partial"`, `truePrice` is a **known priced
+  subtotal**, not a guaranteed checkout total; show every entry in
+  `completeness.unknownCosts` instead of treating it as $0.
 - `feeLoadPct` is the hidden-cost percentage over the advertised price:
   `(truePrice − advertisedEquivalent) / advertisedEquivalent × 100`, rounded to one decimal.
   The advertised equivalent normalizes units where they differ: tickets use
@@ -94,24 +107,33 @@ Compute a true-cost report for one offer.
 |---|---|---|---|
 | `vertical` | string | yes | One of `hotel`, `flight`, `ticket`, `subscription`, `retail`. |
 | `advertised_cents` | integer | yes | The advertised price in cents, `0..1e9`. |
-| `context` | object | no | Vertical-specific detail (below). Its JSON serialization must be at most 4,096 characters. Anything you supply becomes a `listed` line; anything you omit is filled from typicals/estimates and labeled accordingly. |
+| `context` | object | no | Vertical-specific detail (below). Its JSON serialization must be at most 4,096 characters. Supplied amounts become `listed` lines. Missing mandatory inputs remain explicit unknown costs unless a documented, evidence-backed estimation path applies. |
 
 Request bodies over 32 KB are rejected with 413. `context` keys per vertical (all optional;
 all `*_cents` fields are integer cents):
 
 - **hotel** — `market` (`las_vegas`, `new_york`, `miami`, `orlando`, `default`), `nights`
-  (int 1–60, default 1), `resortFee_cents`, `tax_cents`, `taxPct` (number, e.g. `13.38`),
-  `parking_cents`, `parking: false` to exclude parking.
+  (int 1–60, default 1), `mandatoryFeesIncluded: true` when explicitly attested,
+  `resortFee_cents`, `taxesIncluded: true`, `tax_cents`, `taxPct` (number, e.g. `13.38`),
+  `parking_cents`, or `parking: false` to leave optional parking unselected. A claim that
+  fees are separately excluded must include `mandatoryFeesIncluded: false`, an allowed
+  `priceBasis` (`room_only`, `pre_rule`, or `non_us`), and non-empty `feeEvidence`.
 - **flight** — `carrier` (`spirit`, `frontier`, `typical_lcc`, `typical_legacy`),
   `carryOn_cents`, `carryOn: false`, `checkedBags` (int 0–5) with `checkedBag_cents`,
   `seat_cents`, `seatSelection: false`, `channel: "ota"` with `bookingFee_cents`,
-  `taxesIncluded: false` with `taxes_cents`, `travelers` (int 1–9).
+  `taxesIncluded: true` when explicitly attested, or `taxes_cents`; `travelers` (int 1–9).
+  A percentage-based excluded-tax estimate requires `taxesIncluded: false`, an allowed
+  `priceBasis` (`base_fare`, `pre_rule`, or `non_us`), and non-empty `feeEvidence`.
 - **ticket** — `platform` (`ticketmaster`, `stubhub`, `seatgeek`, `default`), `quantity`
   (int 1–20), `serviceFee_cents` or `serviceFeePct`, `facility_cents`,
-  `orderProcessing_cents`, `tax_cents` or `taxPct`.
+  `orderProcessing_cents`, `taxesIncluded: true`, `tax_cents`, or `taxPct`.
+  Modeling separately excluded mandatory ticket fees requires `allInclusivePricing: false`,
+  an allowed `priceBasis` (`face_value`, `pre_rule`, or `non_us`), and non-empty `feeEvidence`.
 - **subscription** — `pattern` (`streaming`, `vpn`, `news`, `fitness`, `default`),
   `introMonths` (int 0–12), `renewal_cents`, `activation_cents`.
-- **retail** — `shipping_cents`, `handling_cents`, `taxPct`.
+- **retail** — `shipping_cents`, `handling_cents` (use integer `0` when the seller
+  explicitly quotes none), `handlingIncluded: true` or `mandatoryExtrasIncluded: true`
+  when explicitly attested, and `taxPct` (use `0` only for a known exempt checkout).
 
 Valid option ids for dropdowns are also served live by the public `GET /api/meta` endpoint.
 
@@ -121,8 +143,9 @@ Valid option ids for dropdowns are also served live by the public `GET /api/meta
 
 ### Example: hotel
 
-A hotel advertising $219/night in Las Vegas, 3 nights, no fees supplied — PriceTruth fills
-in the market-typical resort fee, estimated occupancy tax, and typical parking:
+A hotel displays $219/night for a three-night stay, but the caller has no seller
+attestation about mandatory lodging fees or taxes. PriceTruth preserves the known
+room subtotal and names the two evidence gaps; it does not silently guess them as $0:
 
 ```
 POST /api/v1/analyze
@@ -134,38 +157,48 @@ POST /api/v1/analyze
   "vertical": "hotel",
   "currency": "USD",
   "advertised": { "amount_cents": 21900, "unit": "per_night" },
-  "truePrice": { "amount_cents": 31732, "unit": "per_night" },
-  "total": { "amount_cents": 95196, "label": "3-night stay total" },
+  "truePrice": { "amount_cents": 21900, "unit": "per_night" },
+  "total": { "amount_cents": 65700, "label": "3-night known subtotal" },
   "lineItems": [
     { "code": "room", "label": "Room rate", "amount_cents": 21900,
-      "kind": "base", "certainty": "listed" },
-    { "code": "resort_fee", "label": "Resort fee", "amount_cents": 4500,
-      "kind": "fee", "certainty": "typical",
-      "note": "95% of Las Vegas, NV hotels charge one (typical $45/night)" },
-    { "code": "taxes", "label": "Occupancy taxes (13.38%)", "amount_cents": 3532,
-      "kind": "tax", "certainty": "estimated" },
-    { "code": "parking", "label": "Parking", "amount_cents": 1800,
-      "kind": "addon", "certainty": "typical",
-      "note": "Typical for Las Vegas, NV; skip if you won't have a car" }
+      "kind": "base", "certainty": "listed" }
   ],
-  "feeLoadPct": 44.9,
-  "confidence": 0.72,
+  "feeLoadPct": 0,
+  "confidence": 0.7,
+  "completeness": {
+    "status": "partial",
+    "unknownCosts": [
+      {
+        "code": "mandatory-hotel-fees",
+        "label": "Mandatory hotel fees",
+        "reason": "The source did not attest whether resort, destination, or other mandatory lodging fees are included."
+      },
+      {
+        "code": "hotel-taxes",
+        "label": "Hotel taxes",
+        "reason": "The source did not attest that lodging taxes are included or provide an excluded tax amount."
+      }
+    ]
+  },
   "assumptions": [
-    "Resort fee is the Las Vegas, NV typical; the hotel's actual fee may differ.",
-    "Parking included at the market-typical rate; remove it if you are not driving."
+    "Mandatory lodging-fee inclusion is unknown; confirm the displayed price with the seller.",
+    "Lodging taxes are unknown; confirm the checkout jurisdiction and seller total."
   ],
-  "disclosures": [
-    "Mandatory fees must now be shown in the advertised price under the FTC junk-fee rule; many quotes still surface them only at checkout."
-  ],
+  "disclosures": [],
+  "priceInclusion": {
+    "mandatoryFeesIncluded": null,
+    "taxesIncluded": null,
+    "basis": "unknown",
+    "evidence": null
+  },
   "usage": { "used_today": 1, "daily_limit": 100, "tier": "starter" }
 }
 ```
 
-Reading it: the $219 room really costs **$317.32/night** ($951.96 for the stay) —
-`feeLoadPct: 44.9` means 44.9% hidden cost on top of the sticker. `confidence: 0.72`
-because two lines are `typical` and one is `estimated` (1.0 − 0.08 − 0.08 − 0.12). Supply
-`resortFee_cents`, `tax_cents`, and `parking_cents` from a real quote and every line becomes
-`listed` with `confidence: 1`.
+Reading it: $657 is the three-night **known subtotal**, not a checkout promise.
+`feeLoadPct: 0` means no evidenced cost was added; it does not mean there are no other
+costs. Supply exact excluded amounts or explicit inclusion attestations from the seller to
+resolve the unknown-cost list. Optional parking is added only when the shopper selects it.
 
 ### Example: subscription
 
@@ -193,6 +226,7 @@ POST /api/v1/analyze
   ],
   "feeLoadPct": 45,
   "confidence": 0.8,
+  "completeness": { "status": "complete", "unknownCosts": [] },
   "assumptions": [
     "Renewal price estimated at 1.6× the intro price (typical for streaming media)."
   ],
@@ -216,8 +250,8 @@ become `listed`, `truePrice` is exact (`17988` = $179.88 first year) and `confid
 Fetch a tracked product: its current report, price-history statistics, deal-quality score,
 and the raw history points. The window is fixed at the last **30 days** in v1.
 
-The prototype ships five demo products (synthetic, deterministic history, labeled demo
-data):
+Local demo mode ships five synthetic products with deterministic history and
+explicit demo labels:
 
 | id | vertical | Advertised → true |
 |---|---|---|
@@ -267,7 +301,7 @@ window; timestamps are from the seeded demo data):
     "reasons": [
       "Today is $29.40 above the window low of $287.60.",
       "Below the $326.15 average for this window.",
-      "Hidden fees add 44.7% on top of the advertised price."
+      "Added costs add 44.7% on top of the advertised price."
     ]
   },
   "history": [
@@ -301,9 +335,11 @@ is included in the response.
 
 ## POST /api/v1/track
 
-Append an observed price point to a tracked product's history. The server recomputes the
-true price from the product's stored context — clients submit only what they observed
-advertised, never a true price.
+Append an observed price point to canonical history. This route requires an
+operator-issued API key with the `can_write_history` ingestion scope; ordinary
+customer subscription keys are deliberately read/analyze-only and receive
+`403`. The server recomputes true price from stored context—trusted ingestion
+clients submit only the observed advertised amount, never a claimed true price.
 
 ```json
 { "product_id": "anc-headphones", "advertised_cents": 25900 }
@@ -317,29 +353,40 @@ Response `201`:
 
 Points outside a **0.25×–4× plausibility band** around the product's reference price are
 rejected with `422 {"error": "price point rejected: outside the plausible band for this product"}`
-and are not stored — this is the history-poisoning guard; scores and stats stay trustworthy.
+and are not stored. Accepted observations are still non-idempotent: do not retry
+after an ambiguous network failure without first reconciling the intended point.
 
 ---
 
 ## Public app endpoints (no key)
 
-These are the same-origin endpoints the web app (and browser extension) call directly — **no
-API key required**. They are **rate-limited per IP** (a token bucket, ~20 POST burst / ~120
+These are the same-origin endpoints the web app calls directly—**no API key
+required**. The packaged browser extension calculates locally and does not call
+them automatically. The endpoints are **rate-limited per IP** (a token bucket, ~20 POST burst / ~120
 GET burst from a single IP with a slow refill), and are meant for the app itself, not for
 third-party integrations — use the keyed `/api/v1/` endpoints for that. All money is integer
 USD cents, as everywhere in this doc.
 
-> **Honesty labeling.** `POST /api/search` never presents an estimate as a live quote: every
-> listing carries `source`, `sourceLabel`, `certainty`, and `degraded` so the caller always
-> knows whether a price came from a live source or a clearly-labeled fallback. Billing
+> **Honesty labeling.** `POST /api/search` returns only a verified provider quote or a dated,
+> verified catalog row. If neither is available, it returns a stable error code and no price;
+> callers should offer manual advertised-price input. Successful listings carry `source`,
+> `sourceLabel`, `certainty`, and provenance. Billing
 > responses carry `mock`/`mode` so a simulated checkout is never shown as a real charge.
+
+The legacy unauthenticated `POST /api/alerts` compatibility flow exists only in
+local development. Production returns `410`; customers must sign in and use
+account-owned watchlists/alerts so consent, ownership, limits, and deletion are
+enforced together.
 
 ### POST /api/search
 
-Look up a listing through the provider layer, run it through the true-cost engine, upsert it
-as a tracked product, and append a real price point — so history accrues across repeat
-searches for the same listing. When a live source is configured for the vertical it is used;
-otherwise the response falls back to a deterministic, clearly-labeled **estimate**.
+Look up a listing through the provider layer and run it through the true-cost
+engine. Anonymous searches are ephemeral and return `product_id: null`,
+`persisted: false`, `stats: null`; they never publish the query or alter shared
+history. A signed-in search is stored as an account-private product and accrues
+private history when the result has a stable provider identity. If a verified source is
+unconfigured, unavailable, at capacity, or has no match, the endpoint fails closed and does
+not return `listing`, `report`, or any substitute price.
 
 #### Request body
 
@@ -350,66 +397,81 @@ otherwise the response falls back to a deterministic, clearly-labeled **estimate
 
 #### Response
 
-`200` with the listing, its report, price-history stats, and a deal-quality score:
+`200` with the verified listing, its report, price-history stats, and a deal-quality score.
+For example, a matched dated subscription catalog row returns:
 
 ```json
 {
-  "product_id": "s-ticket-eagles-madison-square-garden-1a2b3c4d",
+  "product_id": null,
+  "persisted": false,
   "listing": {
-    "vertical": "ticket",
-    "name": "Eagles — Madison Square Garden",
+    "vertical": "subscription",
+    "name": "Netflix Standard",
     "url": null,
-    "advertised_cents": 8600,
+    "advertised_cents": 1999,
     "currency": "USD",
-    "context": { "platform": "ticketmaster", "quantity": 2 },
-    "source": "estimated:model",
-    "sourceLabel": "Estimated",
-    "certainty": "estimated",
+    "context": { "pricingMode": "stable_monthly", "termMonths": 12 },
+    "source": "dataset:plans",
+    "sourceLabel": "Verified subscription catalog snapshot",
+    "certainty": "catalog",
     "degraded": false,
-    "fetchedAt": "2026-08-24T17:03:11.208Z"
+    "fetchedAt": "2026-08-25T00:00:00.000Z"
   },
-  "report": { "…": "the standard Report object — vertical, advertised, truePrice, lineItems, feeLoadPct, confidence, assumptions, disclosures" },
-  "stats": { "days": 90, "n": 1, "low_cents": 13400, "high_cents": 13400, "avg_cents": 13400 },
-  "score": { "score": 41, "label": "fair deal", "reasons": ["…"] },
+  "report": { "…": "the standard Report object — vertical, advertised, truePrice, lineItems, feeLoadPct, confidence, completeness, assumptions, disclosures" },
+  "stats": null,
+  "score": { "score": null, "label": "not enough verified history", "reasons": ["…"] },
   "live": false
 }
 ```
 
-(The concrete numbers above are illustrative — the exact figures depend on whether a live
-source answered or the labeled estimate was used, and on the query.)
+(The response shape is abbreviated; the current OpenAPI document is authoritative.)
 
 Field notes:
 
-- `product_id` is a deterministic slug `s-<vertical>-<slug>-<8 hex chars>`, derived from the
-  vertical, listing name, and query. The same search maps to the same product, so repeated
-  searches accrue into one history (window fixed at **90 days** here).
-- `listing.source` is the machine tag for where the price came from — e.g. `live:amadeus`
+- `product_id` is `null` for anonymous requests. Signed-in requests receive an
+  account-namespaced deterministic ID; another account making the same query
+  receives a different private record and cannot read or mutate yours.
+- `listing.source` is the machine tag for where the verified price came from — e.g. `live:amadeus`
   (hotel/flight), `live:ticketmaster` (ticket), `live:retail-feed` (retail), `dataset:plans`
-  (subscription), or `estimated:model` (labeled fallback). `sourceLabel` is the
+  (subscription). `sourceLabel` is the
   human-readable version.
-- `listing.certainty` is the listing-level provenance: `live` (real-time source), `typical`
-  (dated catalog/dataset), or `estimated` (labeled fallback). This is distinct from the
+- `listing.certainty` is the listing-level provenance: `live` (current provider response) or
+  `catalog` (dated catalog/dataset). This is distinct from the
   per-line-item `certainty` **inside** `report`, which uses the report vocabulary
-  `listed`/`typical`/`estimated` (see [The Report object](#the-report-object)).
-- `listing.degraded` is `true` **only** when a live source was configured but the lookup
-  failed and the response fell back to a labeled estimate — the price is an estimate, not a
-  live quote. When no live source is configured at all, the fallback is used with
-  `degraded: false`.
-- `live` is `true` when the listing came from a live source (i.e. `source` does **not** start
-  with `estimated`), and `false` for a labeled estimate. Together with `certainty` and
-  `degraded`, this tells the caller whether they are holding a live quote or a labeled
-  estimate.
+  `listed`/`catalog`/`typical`/`estimated` (see [The Report object](#the-report-object)).
+- `listing.degraded` remains `false` for successful verified results. Upstream failures do not
+  produce a degraded price; they return `PRICE_SOURCE_FAILED` with no listing or report.
+- `live` is `true` only for a current observed provider quote
+  (`listing.provenance.observed=true`). It is `false` for catalog snapshots and
+  catalog snapshots. Together with `certainty`, `asOf`, and freshness fields,
+  this prevents a dated source from being presented as a current provider response.
 - **Subscription is a special case:** it is always answered from a dated catalog snapshot
   shipped in the repo. A matched plan returns `source: "dataset:plans"`,
-  `certainty: "typical"`, `live: true` — it is "live" in the *status* sense but is
-  **point-in-time catalog pricing, not a real-time quote**, so verify current pricing before
-  relying on it. A query that matches no catalogued plan degrades to a labeled
-  `estimated:model` example (`certainty: "estimated"`, `degraded: true`, `live: false`).
-- `stats` is the 90-day price-history summary (`{days: 90, n, low_cents, high_cents,
-  avg_cents}`), or `null` when there is no history; `score` is the deal-quality object (same
-  shape and 0–100 scale as `GET /api/v1/products/:id`).
+  `certainty: "catalog"`, `live: false`: it is **point-in-time catalog pricing,
+  not a current provider quote**, so verify current pricing before relying on it. A query that
+  matches no catalogued plan returns `404` with `code: "NO_VERIFIED_RESULT"` and no price.
+- `/api/meta` exposes the same safe catalog projection at
+  `subscriptionCatalog.freshness` and `providers.subscription.freshness`; `/api/ready`
+  exposes it at `dataSources.subscriptionCatalog`. Fields include `status`, oldest/newest
+  as-of dates, row counts, `ageSeconds`, `maxAgeDays`, and `freshThrough`—never source URLs
+  or credentials. Any non-demo production launch, its search/results, and subscription
+  notifications fail closed when status is `stale` or `invalid`; explicit local/demo mode may
+  show the dated row only with stale provenance.
+- `stats` is `null` for anonymous requests. For a persisted private result it is
+  the 90-day summary (`{days: 90, n, low_cents, high_cents, avg_cents}`);
+  `score` uses the same 0–100 deal-quality shape as product reads.
 
-Errors: `400` for an unknown `vertical`, or a `q` outside 2–120 characters.
+Fail-closed search errors never contain a listing, report, or price:
+
+| Status | Code | Meaning |
+|---:|---|---|
+| 404 | `NO_VERIFIED_RESULT` | The verified source had no matching result. |
+| 422 | `PRICE_SOURCE_UNAVAILABLE` | No verified source is configured for that vertical. |
+| 424 | `PRICE_SOURCE_FAILED` | A configured verified source failed safely. |
+| 429 | `PRICE_SOURCE_BUSY` | The verified source budget/capacity is temporarily exhausted. |
+
+`400` covers an unknown `vertical`, or a `q` outside 2–120 characters. The web app routes
+all four fail-closed source states to manual advertised-price input.
 
 curl:
 
@@ -421,14 +483,18 @@ curl -s http://localhost:4780/api/search \
 
 ### POST /api/billing/checkout
 
-Start a checkout for one plan and get a URL to redirect the browser to.
+Start or reuse an account-owned Stripe Checkout session. Live mode requires an
+authenticated cookie session, same-origin request, and the session's
+`X-CSRF-Token`. Fetch `/api/meta` first and show the approved terms; checkout is
+rejected unless the exact published version is explicitly accepted.
 
 #### Request body
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `planId` | string | yes | One of `premium` (consumer), `api_starter`, `api_pro` (API tiers). |
-| `email` | string | no | Prefills the buyer's email on the checkout. |
+| `acceptTerms` | boolean | live | Must be `true`. |
+| `acceptedTermsVersion` | string | live | Must exactly equal `/api/meta` → `legal.termsVersion`. |
 
 #### Response
 
@@ -438,43 +504,63 @@ Start a checkout for one plan and get a URL to redirect the browser to.
 { "url": "https://checkout.stripe.com/c/pay/cs_live_…", "mock": false, "mode": "live" }
 ```
 
-- In **live mode** (a `STRIPE_SECRET_KEY` is set) `url` is a real Stripe Checkout Session
-  URL, `mock` is `false`, and `mode` is `"live"`.
-- In **mock mode** (no `STRIPE_SECRET_KEY`) `url` points at the app's own
+- In **live mode** `url` is a real Stripe Checkout Session URL, `mock` is
+  `false`, and `mode` is `"live"`. The account email—not arbitrary request
+  input—owns the customer and fulfillment. A `reused` field may indicate a
+  durable still-open checkout intent.
+- In **local mock mode** (no `STRIPE_SECRET_KEY`, non-production) `url` points at the app's own
   `/billing/mock-checkout` simulation page, `mock` is `true`, and `mode` is `"mock"`. The
   mock flow exercises the whole checkout → entitlement/key path locally without charging
   anything, and is clearly labeled as a simulation.
 
-Errors: `400` for an unknown `planId` or an invalid `email`.
+Errors include `400` invalid input/terms, `401` no session, `403` origin/CSRF,
+`409` active or pending subscription conflict, and `503` unsafe commerce,
+reconciliation, tax, catalog, or launch configuration.
 
-### GET /api/billing/claim?session_id=&lt;id&gt;
+### GET /api/billing/checkout/status?session_id=&lt;id&gt;
 
-After an **API-plan** checkout (`api_starter` / `api_pro`) completes, the newly-minted API
-key is staged for exactly **one** reveal on the buyer's success page. This endpoint returns
-it once.
+Poll fulfillment without consuming a key. In live mode the cookie session must
+own the Checkout Session; a different account receives `404`. HTTP `202`
+reports `status: "pending"`; HTTP `200` reports `complete`, `claimable`, or
+`claimed`; HTTP `409` represents a terminal expired/failed checkout. Poll with
+a bounded timeout and never infer success from a redirect alone.
+
+```json
+{ "status": "claimable", "complete": true, "claimable": true, "plan": "api_starter", "tier": "starter" }
+```
+
+### POST /api/billing/claim
+
+After an owned API-plan checkout becomes `claimable`, submit JSON
+`{"session_id":"cs_…"}` with the authenticated cookie, same origin, and
+`X-CSRF-Token`. The raw key is revealed exactly once.
 
 #### Response
 
 `200`:
 
 ```json
-{ "key": "pt_starter_5f0pbZiUEfILdKezgjLl9G5pRZWo1oWn", "tier": "starter", "note": "shown once; store it now" }
+{ "key": "pt_starter_5f0pbZiUEfILdKezgjLl9G5pRZWo1oWn", "tier": "starter", "plan": "api_starter", "status": "claimed", "note": "shown once; store it now" }
 ```
 
-- The key is shown **once** — a second `claim` for the same `session_id` returns `404`.
-- Consumer (`premium`) checkouts mint no API key, so `claim` returns `404` for them.
-- `400` if `session_id` is missing or malformed (it must match `[A-Za-z0-9_]{6,200}`).
+- `202` means signed webhook fulfillment is still pending.
+- `409` means the key was already claimed or is no longer claimable.
+- `404` hides a wrong owner and covers non-API purchases/no staged key.
+- `400` covers a missing/malformed session ID.
 
 As with `npm run keygen`, only a hash of the key is stored server-side; once claimed (or once
 its short TTL lapses unclaimed) it cannot be retrieved again.
 
+Production has no destructive query-string `GET` claim flow. A deprecated
+email-only/GET compatibility path exists only in local mock mode and returns
+`405` outside that mode; clients must not depend on it.
+
 ### POST /api/billing/portal
 
 Return a URL where a customer can self-serve manage or cancel their subscription.
-
-#### Request body
-
-`{ "email": "buyer@example.com" }`
+Live mode uses the authenticated account's Stripe customer and requires the
+same cookie/origin/CSRF controls as checkout; it does not accept an arbitrary
+customer email. The JSON body may be empty.
 
 #### Response
 
@@ -484,30 +570,29 @@ Return a URL where a customer can self-serve manage or cancel their subscription
 { "url": "https://billing.stripe.com/p/session/…", "mock": false }
 ```
 
-- **Live mode:** a real Stripe billing-portal URL for the account's Stripe customer. Returns
-  `404` if no billing account exists for that email.
-- **Mock mode:** `url` points at the app's `/billing/mock-portal` simulation page, with
+- **Live mode:** a real Stripe billing-portal URL for the authenticated
+  account's Stripe customer. Returns `404` when that account has no billing customer.
+- **Local mock mode:** `url` points at the app's `/billing/mock-portal` simulation page, with
   `mock: true` (no live account required).
-- `400` for an invalid `email`.
 
 ### POST /api/billing/webhook
 
-Stripe webhook receiver — **called by Stripe, not by app users.** It verifies the
-`Stripe-Signature` header with HMAC-SHA256 against `STRIPE_WEBHOOK_SECRET` (scheme
-`t=<ts>,v1=<hmac>`, constant-time compare, 300-second timestamp tolerance). On a valid
-`checkout.session.completed` it records a replay-safe billing event (a `UNIQUE` Stripe
-reference means a retried event is counted once) and then either:
-
-- grants the **premium** plan to the buyer's account (consumer plan), or
-- mints and stages an **API key** for one-time claim (API plans).
+Stripe webhook receiver—**called by Stripe, not app users.** It verifies the raw
+body and `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET` with a bounded
+timestamp tolerance. Persistent event-ID deduplication and event-created
+ordering protect ledger/entitlement side effects. Checkout fulfillment is
+account/intent/Price-bound; subscription, invoice, refund, and dispute events
+then maintain access and audit state. See [WEBHOOKS.md](WEBHOOKS.md) for the
+exact production event allowlist and foreign-catalog fail-closed behavior.
 
 #### Response
 
 `200` `{ "received": true, … }` (the `…` summarizes what was applied). Returns `400` on a
 bad, missing, or stale signature.
 
-This endpoint is intentionally **exempt from rate limiting** — Stripe retries with backoff,
-and its signature check is the gate.
+The route bypasses the public token bucket so valid Stripe retries are not
+dropped, but it still enforces body-size, pre-auth rate/concurrency, signature,
+and global webhook-concurrency limits.
 
 ### GET /api/admin/metrics
 
@@ -560,7 +645,7 @@ Returns `403` when `ADMIN_TOKEN` is unset on the server or the supplied token do
 - `providers` reports, per vertical, whether a live source is wired up right now
   (`{"live": boolean}`); no secrets are exposed. `subscription` is always `live: true`
   because it is backed by the shipped dataset snapshot (point-in-time catalog data, not a
-  real-time quote).
+  current provider quote).
 
 ---
 
@@ -571,22 +656,27 @@ Returns `403` when `ADMIN_TOKEN` is unset on the server or the supplied token do
 | `vertical` | string | `hotel` \| `flight` \| `ticket` \| `subscription` \| `retail` |
 | `currency` | string | Always `"USD"` |
 | `advertised` | `{amount_cents, unit}` | The sticker price. Unit: `per_night` \| `per_fare` \| `per_ticket` \| `per_month` \| `total` |
-| `truePrice` | `{amount_cents, unit}` | Advertised + all mandatory/likely costs. Unit: `per_night` \| `per_fare` \| `checkout_total` \| `first_year` \| `total` |
-| `total` | `{amount_cents, label}` or `null` | Multi-unit rollup, e.g. `"3-night stay total"`, `"First-year cost"` |
-| `lineItems` | array | `{code, label, amount_cents, kind, certainty, note?}`; `kind`: `base` \| `fee` \| `tax` \| `addon`; `certainty`: `listed` \| `typical` \| `estimated` |
+| `truePrice` | `{amount_cents, unit}` | Evidence-backed total when `completeness.status` is `complete`; otherwise the known priced subtotal. Unit: `per_night` \| `per_fare` \| `checkout_total` \| `first_year` \| `total` |
+| `total` | `{amount_cents, label}` or `null` | Multi-unit rollup, explicitly labeled as a total or known subtotal, e.g. `"3-night known subtotal"`, `"First-year cost"` |
+| `lineItems` | array | `{code, label, amount_cents, kind, certainty, note?}`; `kind`: `base` \| `fee` \| `tax` \| `addon`; `certainty`: `listed` \| `catalog` \| `typical` \| `estimated` |
 | `feeLoadPct` | number | Hidden-cost % over the advertised equivalent (one decimal) |
 | `confidence` | number | 0.35–1.0; see Conventions |
+| `completeness` | `{status, unknownCosts}` | `status` is `complete` or `partial`. Every unknown cost has `{code, label, reason}` and must remain visible to users. |
 | `assumptions` | string[] | Every assumption the engine made — show these to end users |
 | `disclosures` | string[] | Regulatory/consumer context for this vertical |
 
 ## Errors
 
-Errors are JSON: `{"error": "<message>"}`. Messages are human-readable and safe to log.
+Errors are JSON:
+`{"error":"<message>","code":"<stable class>","requestId":"<correlation id>"}`.
+Branch on status and `code`, not the human-readable message. Every response also
+returns the correlation ID in `X-Request-Id`; include it in support requests.
 
 | Status | When | Example body |
 |---|---|---|
 | 400 | Invalid JSON, wrong types, unknown enum values, non-integer cents, oversized/invalid `context` | `{"error": "vertical must be one of: hotel, flight, ticket, subscription, retail"}` or `{"error": "advertised_cents must be integer cents (0..1e9)"}` |
 | 401 | Missing, malformed, or revoked `X-API-Key` | `{"error": "missing or invalid X-API-Key"}` |
+| 403 | Customer key attempts canonical history ingestion | `{"error":"this API key is read-only; canonical history writes require an operator-issued ingestion scope"}` |
 | 404 | Unknown product id or unknown v1 route | `{"error": "unknown product"}` |
 | 422 | Track point outside the plausibility band | `{"error": "price point rejected: outside the plausible band for this product"}` |
 | 413 | Request body over 32 KB | `{"error": "body exceeds 32768 bytes"}` — the server also closes the connection immediately, so some HTTP clients surface this as a connection reset instead of a readable body |
@@ -631,10 +721,19 @@ Invoke-RestMethod -Uri 'http://localhost:4780/api/v1/analyze' -Method Post `
 
 ## Changelog
 
+- **2026-08-25** — Added passwordless accounts, account-owned watchlists and
+  double-opt-in alerts, preferences/export/deletion, self-service API-key
+  create/rotate/revoke, durable job/outbox delivery, signed Resend delivery
+  events, readiness, request IDs, standard error codes, rate/quota headers, and
+  the full OpenAPI 3.1 contract at `GET /api/openapi`. Billing checkout is now
+  account/CSRF/terms-version bound, fulfillment has a non-consuming status
+  route, and one-time API keys are claimed by authenticated JSON `POST`.
 - **2026-08-24** — Added public same-origin endpoints (no API key, IP rate-limited):
-  `POST /api/search` (live-or-labeled-estimate listing lookup → true-cost report → price-point
-  ingestion) and Stripe-backed billing — `POST /api/billing/checkout`, `GET /api/billing/claim`,
-  `POST /api/billing/portal`, `POST /api/billing/webhook` — plus owner-only
+  `POST /api/search` (verified live/catalog lookup with fail-closed errors; anonymous results are
+  ephemeral and signed-in results are private) and Stripe-backed billing—
+  `POST /api/billing/checkout`, `GET /api/billing/checkout/status`,
+  `POST /api/billing/claim`, `POST /api/billing/portal`,
+  `POST /api/billing/webhook`—plus owner-only
   `GET /api/admin/metrics`. Billing runs live with Stripe keys or in a clearly-labeled mock
   mode; the webhook is exempt from rate limiting.
 - **v1 — 2026-08-21** — Initial release: `POST /api/v1/analyze` (five verticals),

@@ -5,6 +5,7 @@
 import { pathToFileURL } from 'node:url';
 import { open } from './db.js';
 import { analyze } from './engine/analyze.js';
+import * as subscriptions from './providers/subscriptions.js';
 
 // Small deterministic PRNG so every seed run produces identical history.
 function lcg(seed) {
@@ -19,10 +20,11 @@ const DEMO_PRODUCTS = [
   {
     id: 'vegas-hotel',
     vertical: 'hotel',
-    name: 'The Meridian Grand — Las Vegas Strip',
+    name: 'Historical pre-rule demo — Las Vegas hotel',
     url: 'https://example.com/hotels/meridian-grand',
     advertised_cents: 21900,
-    context: { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500 },
+    context: { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500, mandatoryFeesIncluded: false, taxesIncluded: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Synthetic historical demo where mandatory fees were listed separately before the FTC all-in rule.' },
+    source: 'demo:historical', sourceLabel: 'Synthetic historical pre-rule lodging example; not a current offer', certainty: 'estimated',
     walk: { low: 18900, high: 26900, vol: 0.06 },
   },
   {
@@ -34,16 +36,18 @@ const DEMO_PRODUCTS = [
     context: {
       carrier: 'typical_lcc', carryOn_cents: 4500, seat_cents: 3200,
       channel: 'ota', bookingFee_cents: 800, taxesIncluded: false, taxes_cents: 2000,
+      priceBasis: 'base_fare', feeEvidence: 'Synthetic model explicitly represents a base fare before separately listed government taxes.',
     },
     walk: { low: 12900, high: 24900, vol: 0.1 },
   },
   {
     id: 'arena-ticket',
     vertical: 'ticket',
-    name: 'Arena concert — lower bowl ticket',
+    name: 'Historical pre-rule demo — arena ticket',
     url: 'https://example.com/events/arena-tour',
     advertised_cents: 8600,
-    context: { platform: 'ticketmaster', serviceFee_cents: 2795, facility_cents: 700, orderProcessing_cents: 595, tax_cents: 710 },
+    context: { platform: 'ticketmaster', serviceFee_cents: 2795, facility_cents: 700, orderProcessing_cents: 595, tax_cents: 710, allInclusivePricing: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Synthetic historical demo where the shown face value excluded mandatory ticket fees before the FTC rule.' },
+    source: 'demo:historical', sourceLabel: 'Synthetic historical pre-rule ticket example; not a current offer', certainty: 'estimated',
     walk: { low: 7400, high: 12900, vol: 0.08 },
   },
   {
@@ -74,12 +78,32 @@ function hashSeed(id) {
 
 function seed(db) {
   for (const p of DEMO_PRODUCTS) {
-    db.upsertProduct(p);
-    const existing = db.getLatestPoint(p.id);
+    const source = p.source || 'demo:seed';
+    const sourceLabel = p.sourceLabel || 'Synthetic seeded demonstration; not a current offer';
+    db.upsertProduct({
+      ...p,
+      source,
+      sourceLabel,
+      certainty: p.certainty || 'estimated',
+      evidence: {
+        ...(p.evidence || {}),
+        demo: true,
+        refreshable: false,
+        provenance: { source, sourceLabel, evidenceType: 'synthetic_demo', observed: false, demo: true, stale: true, alertEligible: false },
+      },
+    });
+    const pointProvenance = JSON.stringify({
+      provenance: { source, sourceLabel, evidenceType: 'synthetic_demo', observed: false, demo: true, stale: true, alertEligible: false },
+    });
+    // Repair older developer databases whose reserved demo points predate the
+    // provenance columns. These ids are removed entirely in non-demo production.
+    db.raw.prepare(`UPDATE price_points SET source=?,source_label=?,certainty=?,observed=0,alert_eligible=0,evidence_json=? WHERE product_id=?`)
+      .run(source, sourceLabel, p.certainty || 'estimated', pointProvenance, p.id);
+    const existing = db.getLatestPoint(p.id, { eligibleOnly: false });
     if (existing) continue; // idempotent: don't duplicate history on re-run
 
     const rand = lcg(hashSeed(p.id));
-    const report = analyze({ vertical: p.vertical, advertised_cents: p.advertised_cents, context: p.context });
+    const report = analyze({ vertical: p.vertical, advertised_cents: p.advertised_cents, context: p.context, baseCertainty: 'estimated' });
     const ratio = report.truePrice.amount_cents / p.advertised_cents;
 
     let price = Math.round((p.walk.low + p.walk.high) / 2);
@@ -98,9 +122,94 @@ function seed(db) {
         ts,
         advertised_cents: pt.advertised_cents,
         true_cents: Math.round(pt.advertised_cents * ratio),
+        source,
+        sourceLabel,
+        certainty: p.certainty || 'estimated',
+        observed: false,
+        alertEligible: false,
+        evidence: { provenance: { source, sourceLabel, evidenceType: 'synthetic_demo', observed: false, demo: true, stale: true, alertEligible: false } },
       });
     }
   }
+}
+
+function removeDemoSeed(db) {
+  let removed = 0;
+  for (const product of DEMO_PRODUCTS) {
+    db.cancelProductJobs?.(product.id);
+    db.raw.prepare('DELETE FROM alerts WHERE product_id=?').run(product.id);
+    db.raw.prepare('DELETE FROM watchlist WHERE product_id=?').run(product.id);
+    db.raw.prepare('DELETE FROM price_points WHERE product_id=?').run(product.id);
+    removed += db.raw.prepare('DELETE FROM products WHERE id=?').run(product.id).changes;
+  }
+  return removed;
+}
+
+function seedSubscriptionCatalog(db) {
+  const now = new Date().toISOString();
+  let inserted = 0;
+  for (const entry of subscriptions.catalog()) {
+    const listing = subscriptions.live(entry.slug);
+    const asOf = new Date(listing.asOf).toISOString();
+    const maxAgeSeconds = listing.maxAgeSeconds || 93 * 86_400;
+    const stale = Math.max(0, Date.now() - Date.parse(asOf)) > maxAgeSeconds * 1000;
+    const alertEligible = listing.refreshable === true && listing.alertEligible === true && !stale;
+    const id = `catalog-sub-${entry.slug}`.slice(0, 64);
+    const provenance = {
+      source: listing.source,
+      sourceLabel: listing.sourceLabel,
+      evidenceType: 'catalog_snapshot',
+      observed: false,
+      degraded: false,
+      demo: false,
+      fetchedAt: now,
+      asOf,
+      maxAgeSeconds,
+      ageSeconds: Math.max(0, Math.floor((Date.now() - Date.parse(asOf)) / 1000)),
+      stale,
+      alertEligible,
+    };
+    db.upsertProduct({
+      id,
+      vertical: 'subscription',
+      name: listing.name,
+      url: listing.url,
+      advertised_cents: listing.advertised_cents,
+      context: listing.context,
+      source: listing.source,
+      sourceLabel: listing.sourceLabel,
+      certainty: listing.certainty,
+      fetchedAt: now,
+      evidence: {
+        originalQuery: entry.slug,
+        providerIdentity: listing.providerIdentity,
+        refreshable: true,
+        alertEligible,
+        provenance,
+        items: [{ type: 'catalog_snapshot', source: listing.source, label: listing.sourceLabel, observed: false, asOf, fetchedAt: now }],
+      },
+      visibility: 'curated',
+    });
+    const report = analyze({ vertical: 'subscription', advertised_cents: listing.advertised_cents, context: listing.context, baseCertainty: 'catalog' });
+    const latest = db.getLatestPoint(id, { eligibleOnly: false });
+    if (!latest || latest.evidence?.provenance?.asOf !== asOf || latest.true_cents !== report.truePrice.amount_cents) {
+      db.addPricePoint(id, {
+        ts: asOf,
+        advertised_cents: listing.advertised_cents,
+        true_cents: report.truePrice.amount_cents,
+        source: listing.source,
+        sourceLabel: listing.sourceLabel,
+        certainty: listing.certainty,
+        observed: false,
+        alertEligible,
+        fetchedAt: now,
+        evidence: { provenance, items: [{ type: 'catalog_snapshot', source: listing.source, label: listing.sourceLabel, observed: false, asOf, fetchedAt: now }] },
+        providerKey: listing.source,
+      });
+      inserted += 1;
+    }
+  }
+  return inserted;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -113,4 +222,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   db.close();
 }
 
-export { seed, DEMO_PRODUCTS };
+export { seed, seedSubscriptionCatalog, removeDemoSeed, DEMO_PRODUCTS };

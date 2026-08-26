@@ -16,7 +16,7 @@ delete process.env.ADMIN_TOKEN;
 
 const INDEX_HTML = path.join(import.meta.dirname, '..', 'public', 'index.html');
 
-const VEGAS_CONTEXT = { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500 };
+const VEGAS_CONTEXT = { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500, mandatoryFeesIncluded: false, taxesIncluded: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Historical test fixture with mandatory lodging fees listed separately before the FTC rule.' };
 
 function startApp() {
   const { server, db } = createApp({ dbPath: ':memory:' });
@@ -87,7 +87,11 @@ describe('core API', () => {
     assert.equal(typeof meta.options.flightCarriers.typical_lcc, 'string');
     assert.equal(typeof meta.options.ticketPlatforms.ticketmaster, 'string');
     assert.equal(typeof meta.options.subscriptionPatterns.streaming, 'string');
-    assert.equal(typeof meta.partners.booking, 'string');
+    assert.deepEqual(meta.partners, {}, 'unapproved affiliate relationships stay off the public surface');
+    assert.equal(meta.subscriptionCatalog.freshness.snapshot, meta.subscriptionCatalog.snapshot);
+    assert.equal(meta.subscriptionCatalog.freshness.status, meta.providers.subscription.freshness.status);
+    assert.equal(typeof meta.subscriptionCatalog.freshness.maxAgeDays, 'number');
+    assert.doesNotMatch(JSON.stringify(meta.subscriptionCatalog.freshness), /secret|token|password|sourceUrl/i);
   });
 
   it('POST /api/analyze happy path returns the report', async () => {
@@ -121,37 +125,36 @@ describe('core API', () => {
     assert.match((await hugeContext.json()).error, /context too large/);
   });
 
-  it('GET /api/products returns the 5 seeded products with reports and scores', async () => {
+  it('GET /api/products returns seeded products without treating modeled history as eligible stats', async () => {
     const res = await fetch(`${app.base}/api/products`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.demoData, true);
+    assert.equal(Object.hasOwn(body, 'demoData'), false);
     assert.equal(body.products.length, 5);
     const ids = body.products.map((p) => p.product.id).sort();
     assert.deepEqual(ids, ['anc-headphones', 'arena-ticket', 'lcc-flight', 'stream-sub', 'vegas-hotel']);
     for (const p of body.products) {
       assert.equal(typeof p.report.truePrice.amount_cents, 'number');
-      assert.ok(p.stats, `${p.product.id} should have history stats`);
-      assert.ok(Number.isInteger(p.score.score) && p.score.score >= 0 && p.score.score <= 100);
-      assert.equal(typeof p.score.label, 'string');
+      assert.equal(p.stats, null);
+      assert.equal(p.score.score, null);
+      assert.equal(p.demoData, true);
     }
   });
 
-  it('GET /api/products/vegas-hotel includes history and stats; days=90 has more points', async () => {
+  it('GET /api/products/vegas-hotel exposes labeled raw history but excludes it from eligible stats', async () => {
     const res30 = await fetch(`${app.base}/api/products/vegas-hotel?days=30`);
     assert.equal(res30.status, 200);
     const p30 = await res30.json();
     assert.equal(p30.product.id, 'vegas-hotel');
     assert.ok(Array.isArray(p30.history) && p30.history.length > 0);
-    assert.ok(p30.stats && p30.stats.n > 0 && p30.stats.low_cents <= p30.stats.high_cents);
-    assert.equal(p30.stats.days, 30);
+    assert.equal(p30.stats, null);
     assert.equal(p30.demoData, true);
     const point = p30.history[0];
     assert.ok('ts' in point && 'advertised_cents' in point && 'true_cents' in point);
 
     const res90 = await fetch(`${app.base}/api/products/vegas-hotel?days=90`);
     const p90 = await res90.json();
-    assert.equal(p90.stats.days, 90);
+    assert.equal(p90.stats, null);
     assert.ok(p90.history.length > p30.history.length, `expected 90d (${p90.history.length}) > 30d (${p30.history.length})`);
   });
 
@@ -169,7 +172,7 @@ describe('core API', () => {
     const anon = await postJson(app.base, '/api/v1/track', { product_id: 'anc-headphones', advertised_cents: 25900 });
     assert.equal(anon.status, 401);
 
-    const key = app.db.createApiKey('track-test', 'starter');
+    const key = app.db.createApiKey('track-test', 'starter', { canWriteHistory: true });
     const res = await postJson(app.base, '/api/v1/track',
       { product_id: 'anc-headphones', advertised_cents: 25900 }, { 'x-api-key': key });
     assert.equal(res.status, 201);
@@ -182,41 +185,63 @@ describe('core API', () => {
     const afterHist = await afterRes.json();
     assert.equal(afterHist.points.length, beforeHist.points.length + 1);
 
+    // The first ingestion freezes the original $299 baseline. A 4x edge
+    // observation is valid, but it must not become the baseline for another
+    // 4x step.
+    const edge = await postJson(app.base, '/api/v1/track',
+      { product_id: 'anc-headphones', advertised_cents: 119600 }, { 'x-api-key': key });
+    assert.equal(edge.status, 201);
+    const ratchet = await postJson(app.base, '/api/v1/track',
+      { product_id: 'anc-headphones', advertised_cents: 478400 }, { 'x-api-key': key });
+    assert.equal(ratchet.status, 422);
+    assert.equal(app.db.getPublicProduct('anc-headphones').evidence.ingestionBaseline_cents, 29900);
+
     // Outside the 0.25x–4x plausibility band → 422, nothing stored.
     const poison = await postJson(app.base, '/api/v1/track',
       { product_id: 'anc-headphones', advertised_cents: 1 }, { 'x-api-key': key });
     assert.equal(poison.status, 422);
     const afterPoison = await fetch(`${app.base}/api/history/anc-headphones?days=90`);
-    assert.equal((await afterPoison.json()).points.length, afterHist.points.length);
+    assert.equal((await afterPoison.json()).points.length, afterHist.points.length + 1);
   });
 });
 
 describe('alerts paywall and admin', () => {
   let app;
-  before(async () => { app = await startApp(); });
+  before(async () => {
+    app = await startApp();
+    for (const id of ['vegas-hotel', 'lcc-flight']) {
+      const product = app.db.getProduct(id);
+      app.db.upsertProduct({
+        id: product.id, vertical: product.vertical, name: product.name, url: product.url,
+        advertised_cents: product.advertised_cents, context: product.context, source: product.source,
+        sourceLabel: product.source_label, certainty: product.certainty, fetchedAt: product.fetched_at,
+        evidence: { ...product.evidence, refreshable: true, providerIdentity: `test:${id}`, originalQuery: product.name, provenance: { ...(product.evidence?.provenance || {}), alertEligible: true } },
+      });
+    }
+  });
   after(async () => { await stopApp(app); });
 
   const alertBody = (extra = {}) => ({
     email: 'buyer@example.com', product_id: 'vegas-hotel', threshold_cents: 30000, ...extra,
   });
 
-  it('first alert is free (201), second hits the 402 paywall with an upgrade offer', async () => {
+  it('first legacy alert requests opt-in and replay is generic without mutating quota', async () => {
     const first = await postJson(app.base, '/api/alerts', alertBody());
     assert.equal(first.status, 201);
     assert.equal((await first.json()).created, true);
 
     const second = await postJson(app.base, '/api/alerts', alertBody({ product_id: 'lcc-flight' }));
-    assert.equal(second.status, 402);
+    assert.equal(second.status, 202);
     const body = await second.json();
-    assert.ok(body.error);
-    assert.equal(body.upgrade.planId, 'premium');
-    assert.ok(body.upgrade.price);
+    assert.equal(body.accepted, true);
+    assert.equal(body.created, false);
+    assert.equal(app.db.countAlertsForEmail('buyer@example.com'), 1);
   });
 
   it('a client-supplied premium flag does NOT lift the limit (entitlement is server-side)', async () => {
     // The old demo bypass is gone: only a real completed checkout grants premium.
     const res = await postJson(app.base, '/api/alerts', alertBody({ product_id: 'lcc-flight', premium: true }));
-    assert.equal(res.status, 402);
+    assert.equal(res.status, 202);
   });
 
   it('a real premium purchase (mock checkout) lifts the alert limit for that email', async () => {
@@ -226,15 +251,18 @@ describe('alerts paywall and admin', () => {
     const first = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'vegas-hotel' }));
     const second = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'lcc-flight' }));
     assert.equal(first.status, 201);
-    assert.equal(second.status, 201);
-    assert.equal((await second.json()).plan, 'premium');
+    assert.equal((await first.json()).plan, 'premium');
+    assert.equal(second.status, 202);
+    assert.equal((await second.json()).created, false);
   });
 
   it('premium accounts are capped at 20 alerts, then 402 with the premium message', async () => {
     const email = 'cap-test@example.com';
     // Seed the account + exactly 20 alerts directly, so the per-IP write rate
     // limit (20 burst) does not interfere with exercising the alert cap.
-    app.db.upsertAccount({ email, plan: 'premium' });
+    const account = app.db.upsertAccount({ email, plan: 'premium' });
+    app.db.upsertEntitlement({ accountId: account.id, product: 'premium', status: 'active', sourceRef: 'sub_cap_test', eventCreated: 1 });
+    app.db.syncAccountPlan(account.id);
     for (let i = 0; i < 20; i++) app.db.createAlert({ email, productId: 'vegas-hotel', threshold_cents: 30000 + i });
     const res = await postJson(app.base, '/api/alerts', alertBody({ email, product_id: 'lcc-flight' }));
     assert.equal(res.status, 402);
@@ -319,8 +347,22 @@ describe('B2B API keys, metering, and quota', () => {
 
 describe('affiliate interstitial and static serving', () => {
   let app;
-  before(async () => { app = await startApp(); });
-  after(async () => { await stopApp(app); });
+  const affiliateNames = ['ENABLE_AFFILIATE_LINKS', 'AFFILIATE_RELATIONSHIPS_APPROVED', 'AFFILIATE_DISCLOSURE_URL', 'AFFILIATE_TAG_BOOKING'];
+  const savedAffiliate = Object.fromEntries(affiliateNames.map((name) => [name, process.env[name]]));
+  before(async () => {
+    process.env.ENABLE_AFFILIATE_LINKS = '1';
+    process.env.AFFILIATE_RELATIONSHIPS_APPROVED = '1';
+    process.env.AFFILIATE_DISCLOSURE_URL = 'https://pricetruth.com/affiliate-disclosure';
+    process.env.AFFILIATE_TAG_BOOKING = 'approved-partner-123';
+    app = await startApp();
+  });
+  after(async () => {
+    await stopApp(app);
+    for (const name of affiliateNames) {
+      if (savedAffiliate[name] === undefined) delete process.env[name];
+      else process.env[name] = savedAffiliate[name];
+    }
+  });
 
   const go = (partner, target) => fetch(`${app.base}/go/${partner}?target=${encodeURIComponent(target)}`);
 
@@ -330,7 +372,20 @@ describe('affiliate interstitial and static serving', () => {
     const html = await res.text();
     assert.ok(html.includes('Affiliate disclosure'));
     assert.ok(html.includes('rel="noopener nofollow sponsored"'));
-    assert.ok(html.includes('aid=pricetruth-demo')); // affiliate tag appended
+    assert.ok(html.includes('aid=approved-partner-123'));
+    assert.ok(html.includes('https://pricetruth.com/affiliate-disclosure'));
+    assert.ok(!html.includes('pricetruth-demo'));
+  });
+
+  it('fails closed when relationship approval is disabled', async () => {
+    delete process.env.AFFILIATE_RELATIONSHIPS_APPROVED;
+    try {
+      const res = await go('booking', 'https://booking.com/hotel/meridian');
+      assert.equal(res.status, 404);
+      await res.arrayBuffer();
+    } finally {
+      process.env.AFFILIATE_RELATIONSHIPS_APPROVED = '1';
+    }
   });
 
   it('subdomain www.booking.com is allowed', async () => {
@@ -414,21 +469,61 @@ describe('search, billing, and admin metrics', () => {
     else process.env.STRIPE_WEBHOOK_SECRET = savedWebhookSecret;
   });
 
-  it('POST /api/search returns an analyzed, tracked listing and builds history', async () => {
+  it('POST /api/search fails closed when no verified source is configured', async () => {
     const r1 = await postJson(app.base, '/api/search', { vertical: 'retail', q: 'sony wh-1000xm5' });
-    assert.equal(r1.status, 200);
+    assert.equal(r1.status, 422);
     const d1 = await r1.json();
-    assert.equal(d1.listing.vertical, 'retail');
-    assert.ok(Number.isInteger(d1.report.truePrice.amount_cents));
-    assert.equal(typeof d1.live, 'boolean');
-    assert.ok(d1.product_id.startsWith('s-retail-'));
+    assert.equal(d1.code, 'PRICE_SOURCE_UNAVAILABLE');
+    assert.equal('listing' in d1, false);
+    assert.equal('report' in d1, false);
+    assert.doesNotMatch(JSON.stringify(d1), /RETAIL_API_URL|estimated_cents|advertised_cents/);
+  });
 
-    // Searching again for the same query appends another price point (history).
-    const r2 = await postJson(app.base, '/api/search', { vertical: 'retail', q: 'sony wh-1000xm5' });
-    const d2 = await r2.json();
-    assert.equal(d2.product_id, d1.product_id);
-    const hist = await (await fetch(`${app.base}/api/products/${d2.product_id}`)).json();
-    assert.ok(hist.history.length >= 2, 'repeat searches should accrue history');
+  it('never enables admin minting with a weak configured token', async () => {
+    process.env.ADMIN_TOKEN = 'a';
+    try {
+      const response = await postJson(app.base, '/api/admin/keys', { label: 'attacker', tier: 'pro' }, { 'X-Admin-Token': 'a' });
+      assert.equal(response.status, 403);
+      const ready = await fetch(`${app.base}/api/ready`);
+      assert.equal(ready.status, 503);
+      assert.equal((await ready.json()).productionSafety.adminToken, false);
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
+  });
+
+  it('labels a verified subscription catalog snapshot as dataset, not demo data', async () => {
+    const response = await postJson(app.base, '/api/search', { vertical: 'subscription', q: 'netflix' });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.live, false);
+    assert.equal(body.demoData, false);
+    assert.equal(body.dataKind, 'dataset');
+    assert.equal(body.listing.provenance.evidenceType, 'catalog_snapshot');
+    assert.equal(body.listing.provenance.asOf, '2026-08-25T00:00:00.000Z');
+    assert.equal(body.listing.certainty, 'catalog');
+    assert.equal(body.report.lineItems[0].certainty, 'catalog');
+    assert.match(body.report.lineItems[0].label, /catalog/i);
+  });
+
+  it('never fabricates a search result when verified data is unavailable or unmatched', async () => {
+    const unavailable = [
+      ['hotel', 'Las Vegas'], ['flight', 'LAX-LAS'], ['ticket', 'example concert'], ['retail', 'example headphones'],
+    ];
+    for (const [vertical, q] of unavailable) {
+      const response = await postJson(app.base, '/api/search', { vertical, q });
+      assert.equal(response.status, 422, vertical);
+      const body = await response.json();
+      assert.equal(body.code, 'PRICE_SOURCE_UNAVAILABLE', vertical);
+      assert.equal('listing' in body, false, vertical);
+      assert.equal('report' in body, false, vertical);
+    }
+    const unmatched = await postJson(app.base, '/api/search', { vertical: 'subscription', q: 'zxqwv-not-a-real-plan' });
+    assert.equal(unmatched.status, 404);
+    const body = await unmatched.json();
+    assert.equal(body.code, 'NO_VERIFIED_RESULT');
+    assert.equal('listing' in body, false);
+    assert.equal('report' in body, false);
   });
 
   it('POST /api/search 400s on an unknown vertical', async () => {
@@ -496,11 +591,47 @@ describe('search, billing, and admin metrics', () => {
     assert.equal(res.status, 400);
   });
 
+  it('POST /api/billing/webhook rejects test events in live mode and live events in mock mode', async () => {
+    const { signPayload, mockCompletedEvent } = await import('../src/billing.js');
+    const baseEvent = mockCompletedEvent({ planId: 'premium', email: 'mode-guard@x.com', sessionId: 'cs_mode_guard' });
+    const send = async (event) => {
+      const raw = JSON.stringify(event);
+      return fetch(`${app.base}/api/billing/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'stripe-signature': signPayload(raw, 'whsec_test_it') },
+        body: raw,
+      });
+    };
+
+    const liveEventInMock = await send({
+      ...baseEvent,
+      id: 'evt_live_in_mock',
+      livemode: true,
+      data: { object: { ...baseEvent.data.object, livemode: true } },
+    });
+    assert.equal(liveEventInMock.status, 400);
+
+    const savedEnable = process.env.ENABLE_LIVE_BILLING;
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    process.env.ENABLE_LIVE_BILLING = '1';
+    process.env.STRIPE_SECRET_KEY = 'sk_live_12345678901234567890';
+    try {
+      const testEventInLive = await send({ ...baseEvent, id: 'evt_test_in_live' });
+      assert.equal(testEventInLive.status, 400);
+      assert.equal(app.db.getAccount('mode-guard@x.com'), null, 'a mode-mismatched event must not create an account or entitlement');
+    } finally {
+      if (savedEnable === undefined) delete process.env.ENABLE_LIVE_BILLING;
+      else process.env.ENABLE_LIVE_BILLING = savedEnable;
+      if (savedSecret === undefined) delete process.env.STRIPE_SECRET_KEY;
+      else process.env.STRIPE_SECRET_KEY = savedSecret;
+    }
+  });
+
   it('GET /api/admin/metrics is 403 without a token, 403 on a same-length wrong token, 200 with the right token', async () => {
     const denied = await fetch(`${app.base}/api/admin/metrics`);
     assert.equal(denied.status, 403);
 
-    const TOKEN = 'test-admin-token-1234567890';
+    const TOKEN = 'Q7pL2vN9xR4mK8sT6wY3cF5hJ1dB0zUaG';
     process.env.ADMIN_TOKEN = TOKEN;
     try {
       // Length-mismatch branch (short token).
@@ -529,7 +660,7 @@ describe('search, billing, and admin metrics', () => {
   });
 
   it('POST /api/admin/keys mints a working key with a valid token and rejects a bad tier', async () => {
-    const TOKEN = 'admin-mint-token-abcdefghij';
+    const TOKEN = 'M4nR8vQ2xL7sK9wT5yC3fH6jP1dZ0uBaG';
     process.env.ADMIN_TOKEN = TOKEN;
     try {
       const minted = await postJson(app.base, '/api/admin/keys', { label: 'Acme', tier: 'pro' }, { 'X-Admin-Token': TOKEN });

@@ -1,169 +1,148 @@
-# Compliance Posture Memo — PriceTruth (prototype)
+# Legal and compliance launch gate
 
-**To:** PriceTruth team (internal)
-**From:** Product / compliance
-**Date:** 2026-08-21
-**Re:** Regulatory landscape, how the product relates to it, and what production needs
+> **INTERNAL PRELAUNCH CONTROL DOCUMENT — NOT LEGAL ADVICE OR A PUBLIC POLICY**
+>
+> This file tells the operator what must be decided, reviewed, tested, and evidenced before
+> launch. It intentionally contains no assumed entity, jurisdiction, venue, postal address, or
+> contact channel. Product documentation cannot make those decisions on the operator's behalf.
 
-> Internal working memo, not legal advice. Positions here are grounded in what
-> the code actually does as of this date; counsel review is a launch gate
-> (checklist, bottom).
+**Overall status:** Blocked pending operator facts and qualified legal review
 
----
+**Control revision:** August 25, 2026
 
-## 1. FTC Rule on Unfair or Deceptive Fees (16 CFR Part 464)
+## Non-negotiable fail-closed rule
 
-**What it is.** The FTC's "junk fees" rule, in force since May 2025. It covers
-**live-event tickets and short-term lodging** (hotels, vacation rentals): the
-advertised price must be the **all-in total** — inclusive of all mandatory fees
-and charges — displayed at least as prominently as any other price. Government
-taxes and reasonable shipping may be excluded from the headline number but must
-be disclosed before checkout, and no fee may be misrepresented.
+The release must not accept payment, issue paid access, activate affiliate compensation, send
+user notifications, or market regulated availability until the relevant gate below is approved.
+If an owner, fact, policy, or test result is missing, the affected feature remains disabled.
 
-**How PriceTruth relates — two roles:**
+The existing technical launch guard and honest frontend states support this rule, but they do not
+replace operator sign-off. No engineer may invent a company, address, contact, jurisdiction,
+venue, partner relationship, or legal conclusion to make a check pass.
 
-1. **Compliance verification.** Our hotel and ticket verticals compute exactly
-   the delta Part 464 targets: advertised price vs. true all-in price
-   (`feeLoadPct` in every report). Where a covered seller advertises $86 and
-   checkout is $134, that gap is now not just consumer-hostile, it is
-   presumptively a rule violation. PriceTruth's breakdowns are, in effect, a
-   Part 464 audit trail — useful to consumers, journalists, and (as a B2B
-   product) to sellers checking their own funnels.
+## Blocking operator facts
 
-2. **Covering what the rule doesn't.** Part 464 deliberately stops at tickets
-   and lodging. PriceTruth's other verticals live in the gap:
-   - **Airline ancillaries** — outside FTC jurisdiction (see DOT, §3).
-   - **Subscription teaser pricing** — first-year vs. advertised monthly rate
-     (see §2).
-   - **General retail** — drip pricing and inflated-reference pricing remain
-     governed only by FTC Act §5's general deception standard.
+The launch decision cannot be completed without:
 
-   Positioning note: this is the product story — "the rule fixed two verticals;
-   we cover the rest" — and it is accurate. Keep it in marketing only in this
-   form; never imply the rule covers more than it does.
+- Legal operator identity, formation status, service address, and signing authority.
+- Private, monitored support, privacy, legal-notice, and security-reporting channels.
+- Launch countries and states, excluded regions, user eligibility, and minimum age.
+- Governing law, venue, dispute path, and mandatory consumer-rights position approved by counsel.
+- Production hosting, database, email, billing, analytics, price-provider, and affiliate vendors.
+- Data locations, subprocessors, transfer mechanisms, retention periods, and incident owners.
+- Final plans, prices, taxes, renewal behavior, cancellation timing, refunds, and support process.
+- Live affiliate or sponsorship agreements, if any.
+- Accessibility owner and ongoing conformance process.
 
-**Obligation on us:** minimal today (we sell nothing covered). If PriceTruth
-ever displays covered sellers' prices in an advertising-like context, our
-displayed headline numbers should themselves be all-in — which they already
-are, by design.
+These belong in a restricted operator record, not as sample values in the repository.
 
-## 2. FTC Negative Option Rule ("click-to-cancel", 16 CFR Part 425)
+## Gate matrix
 
-**Status — handle with care.** The FTC finalized the amended rule in late 2024,
-but the **Eighth Circuit vacated it in July 2025** on procedural grounds before
-its main provisions took effect. Negative-option marketing is still policed
-under ROSCA, FTC Act §5, and increasingly strict state auto-renewal laws
-(California's, notably), and the FTC may re-promulgate. Do not claim in product
-copy that "click-to-cancel is the law"; the accurate framing is that regulators
-are actively targeting subscription traps and enforcement continues under
-existing statutes.
+| Area | Required decision and evidence | Feature blocked until approval |
+| --- | --- | --- |
+| Public terms | Counsel-approved agreement matching account, API, billing, cancellation, and dispute behavior | Paid plans and mandatory account acceptance |
+| Privacy | Verified data inventory, approved policy, subprocessors, retention, rights workflows, and contact route | Accounts, notifications, analytics, and payments |
+| Billing | Approved prices and renewal/refund rules; live provider configuration; webhook, entitlement, cancellation, and reconciliation tests | All charges and paid entitlements |
+| Email | Sender identity, consent basis, double opt-in where used, unsubscribe, suppression, deliverability, retention, and abuse handling | Alerts, digests, and marketing email |
+| Affiliate | Signed relationship, pre-click disclosure, tracking inventory, allowlist, and ranking-independence test | Compensated links and sponsored placements |
+| Pricing claims | Evidence that displayed totals label estimates, sources, freshness, uncertainty, and seller-verification requirements | Public price reports for an affected vertical |
+| API | Approved commercial terms, quotas, key lifecycle, abuse response, data rights, and support process | External paid API issuance |
+| Security | Monitored private reporting route, incident plan, secret management, recovery tests, and approved disclosure policy | Public internet exposure and paid operations |
+| Accessibility | Keyboard, focus, screen-reader, contrast, zoom, reflow, error, and mobile tests with an issue owner | Public release of affected user journeys |
+| Records | Versioned approvals, policy acceptance, consent, billing, incident, deletion, and vendor evidence with retention rules | The feature whose evidence cannot be retained |
 
-**Relevance to us.** The subscription vertical models precisely the harms the
-rule targeted: teaser rates that step up, "free" trials that convert, and
-first-year cost vs. advertised monthly price. Our `first_year` true-price unit
-is the honest number ROSCA-style disclosure requires. If we ever sell our own
-premium subscription (the $4/month alert tier is currently a demo paywall with
-no payment collected), **we** become a negative-option seller and must ship:
-clear pre-consent disclosure of renewal terms, express informed consent, and
-cancellation as easy as signup.
+## Regulatory review topics
 
-## 3. DOT full-fare rule (airfare)
+Qualified counsel should determine applicability for the actual operator, audience, claims, and
+territories. At minimum, the review should cover:
 
-Airline price advertising is DOT's turf, not the FTC's. Under 14 CFR 399.84,
-an advertised airfare must already include mandatory taxes and government fees
-— so the "hidden" money in air travel is **ancillaries**: bags, seat selection,
-boarding order, changes. That is exactly what our flight vertical estimates
-(the $189 fare that becomes $294 with a bag and a seat is legal advertising —
-and still a real consumer surprise). DOT's separate ancillary-fee transparency
-rulemaking has been tied up in litigation; track it, but our value does not
-depend on it. As with §1: we analyze fares, we do not advertise them; if we
-ever display fares promotionally, the displayed fare must be full-fare
-compliant — which our true-price framing already exceeds.
+- All-in-price and mandatory-fee requirements for lodging, tickets, travel, subscriptions, and
+  retail, including the FTC rule on unfair or deceptive fees and applicable state rules.
+- FTC endorsement and material-connection requirements for affiliate and sponsored content.
+- Federal and state unfair or deceptive acts and practices, comparative claims, substantiation,
+  dark-pattern, auto-renewal, and negative-option requirements.
+- Email and electronic-message consent, sender identification, unsubscribe, and recordkeeping.
+- State, federal, and international privacy, breach-notification, children's privacy, biometric,
+  sensitive-data, data-broker, and cross-border-transfer rules that match the launch scope.
+- Payment-card allocation, payment-provider contracts, taxes, refunds, chargebacks, and sanctions.
+- Accessibility duties and the chosen conformance target.
+- Data-source licenses, website terms, database rights, trademarks, scraping restrictions, and
+  permissions for product images or copied content.
+- Consumer-reporting, financial-advice, insurance, travel-agent, ticket-broker, or other licensing
+  regimes if future product behavior enters those categories.
 
-## 4. Alert emails: CAN-SPAM and double opt-in (production plan)
+This list identifies questions; it does not assert that a law applies or that the service
+complies.
 
-Today the prototype stores alerts and **sends nothing** (no mail provider is
-wired; the API response says so explicitly). Before production sends a single
-email:
+## Product truthfulness controls
 
-- **Double opt-in.** Confirmation email with a verification link; no alert
-  fires until confirmed. This kills typo'd/malicious third-party signups (the
-  API currently accepts any syntactically valid address) and creates the
-  consent record GDPR wants.
-- **CAN-SPAM baseline**, even though requested price alerts are plausibly
-  transactional: accurate header/from and subject lines, functional one-click
-  unsubscribe in every message honored promptly (statute allows 10 business
-  days; do it immediately), sender's physical postal address in the footer
-  ([COMPANY ENTITY]'s — another reason the entity must exist first), and no
-  further mail after opt-out.
-- **Scope discipline.** Alert emails contain the alert. Any marketing content
-  makes the message commercial and needs its own consent; default to never.
-- Unsubscribe = delete the alert row, consistent with the privacy policy's
-  deletion promise.
+Release evidence must show that:
 
-## 5. Data-protection posture: minimization by design
+- Advertised price and estimated total are clearly distinguished.
+- Every material line item is labeled as listed, typical, or estimated.
+- Source identity, collection time, freshness, and degraded status are visible.
+- Assumptions are understandable and editable where the product supports editing.
+- Reports direct users to verify the final seller checkout before purchasing.
+- Stale, unavailable, modeled, and provider-failure states never masquerade as live evidence.
+- Deal scores and comparisons explain their basis and do not imply guaranteed savings.
+- Affiliate compensation cannot change calculations, evidence, or ranking.
+- Share, copy, print, and export surfaces retain material qualifications.
 
-The strongest compliance position we hold, because it is enforced by code, not
-policy:
+These controls should be tested with real production configurations for every enabled vertical.
 
-- Only personal datum stored: alert email (+ product, threshold). SQLite, local
-  file, no cloud, no analytics. In the default configuration: no processors, no
-  transfers. Optional live integrations add named processors with narrow data
-  flows (Stripe = payment/email at checkout; data providers = search terms only)
-  — enumerated in `privacy.md` under "Service providers".
-- No accounts, no cookies, no analytics. The **browser** makes no third-party
-  requests (CSP `default-src 'self'`). The **server** makes zero outbound calls
-  by default, and only server-to-server calls to the configured providers above
-  when those integrations are switched on — never to advertising or analytics.
-- Access logs contain method, path, status, duration — **no IPs, no query
-  strings**. IPs live only in in-memory rate-limit buckets, pruned in minutes.
-- B2B keys stored as SHA-256 hashes; raw key shown once at mint.
-- `Referrer-Policy: no-referrer` — outbound clicks leak nothing.
+## Privacy and lifecycle controls
 
-Consequence: GDPR/CCPA exposure is minimal and honest — see `privacy.md`. Keep
-it this way; every new datum added to the schema is a compliance decision, not
-just an engineering one.
+Before account or notification launch, retain proof that:
 
-## 6. Affiliate program (16 CFR Part 255)
+- Passwordless sign-in verifies control of the address and sessions can be revoked.
+- State-changing account requests enforce CSRF protection.
+- Alert consent and notification subscription states are explicit.
+- Users can manage watchlist items, alerts, preferences, and API keys.
+- Export and deletion complete as described in the approved privacy policy.
+- Account deletion handles billing, active sessions, notifications, backups, and legally required
+  records according to documented rules.
+- Raw API keys are disclosed once, stored securely when temporarily staged, rotatable, and
+  revocable.
+- Logs and support tools avoid unnecessary personal data and secrets.
+- Retention and deletion jobs are monitored and recoverable.
 
-Covered in `affiliate-disclosure.md`. The structural guarantees: mandatory
-interstitial disclosure on every `/go` link, `rel="sponsored"`, partner
-allowlist, and — the substantive one — scores/prices computed with no partner
-input. When real programs are signed, each network's own disclosure and
-brand-usage terms must be checked, and the disclosure page must name programs.
+## Billing controls
 
-## 7. Production-readiness compliance checklist
+Before accepting money:
 
-Gates before anything real launches:
+- Production billing must fail closed unless durable storage, email, worker, public URL, secrets,
+  webhook verification, and live price-source requirements are satisfied.
+- Checkout must show the exact operator, product, interval, renewal, currency, taxes, cancellation
+  path, refund position, and links to approved terms and privacy policy.
+- Webhook processing, entitlement changes, duplicate delivery, failed payment, cancellation,
+  refund, dispute, and reconciliation paths must pass against the live provider's test environment.
+- Support must be able to identify an entitlement without exposing secret payment data.
+- Revenue and entitlement records must be transactionally consistent and recoverable.
+- The account dashboard must never imply that a test or unavailable plan is purchasable.
 
-- [ ] Form [COMPANY ENTITY]; put real entity name, contact email, and postal
-      address into privacy.md, terms.md, affiliate-disclosure.md, legal.html.
-- [ ] Counsel review of Terms (esp. liability cap, governing law/venue) and
-      Privacy Policy; fix [GOVERNING LAW JURISDICTION]/[VENUE].
-- [ ] Mail provider selected; DPA signed; double opt-in + one-click
-      unsubscribe implemented and tested; postal address in footer.
-- [ ] Alert retention schedule defined, documented in privacy.md, enforced by
-      a cleanup job; DSAR (access/deletion) handling process written down.
-- [ ] TLS termination, backups (encrypted, retention-limited), and a breach
-      response plan for the one table with personal data.
-- [ ] Verify logs stay IP/query-free through any hosting/CDN layer added in
-      front (a CDN's default access logs would silently break §5's claims).
-- [ ] Affiliate networks signed; per-network compliance checked; disclosure
-      page updated with named programs.
-- [ ] If premium alerts become a real paid subscription: ROSCA/state
-      auto-renewal compliance (disclosure, consent, easy cancel) before first
-      charge.
-- [ ] State privacy law scan at real traffic volumes (CCPA/CPRA thresholds,
-      Virginia, Colorado, etc.); COPPA n/a but keep the children's-privacy
-      statement true.
-- [ ] Accuracy substantiation file: keep fee datasets sourced and dated so
-      "typical fee" claims can be defended; label freshness in-product.
-- [ ] Monitoring: Part 464 enforcement actions, Negative Option Rule
-      re-promulgation, DOT ancillary rulemaking — quarterly review.
+## Accessibility release evidence
 
-## 8. Standing product rule
+Automated tests are necessary but not sufficient. The release record should include:
 
-Honesty is the compliance strategy. Every projected number carries `certainty`
-and confidence; demo data is labeled demo; estimates are labeled estimates. A
-truth-in-pricing product that shades its own numbers is one FTC CID away from
-being a very short story. When in doubt, disclose.
+- Serious and critical automated issue scans for representative desktop and mobile routes.
+- Keyboard-only navigation, visible focus, skip-link, dialog, form-error, and route-focus checks.
+- Screen-reader checks for navigation, universal search, reports, tables, alerts, and account tools.
+- Reflow and zoom checks without document-level horizontal scrolling.
+- Touch targets, contrast, non-color cues, reduced motion, and forced-colors checks.
+- A process for triage, regression testing, and responding to accessibility feedback.
+
+## Approval record
+
+The release owner must store a dated, access-controlled record containing:
+
+- Operator facts and launch territories.
+- Counsel and specialist reviews, scope, decisions, and unresolved risks.
+- Approved public documents and their deployed URLs and versions.
+- Vendor and subprocessor inventory.
+- Test results and configuration snapshot.
+- Named owners for incidents, privacy requests, billing disputes, policy changes, and periodic
+  review.
+- A go, limited-go, or no-go decision for each gated feature.
+
+This repository document remains an internal control. It is never itself evidence that legal
+review occurred, that a policy is published, or that a feature may be enabled.

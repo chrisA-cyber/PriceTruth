@@ -1,83 +1,99 @@
-# PriceTruth — Internal Interface Contracts
+# PriceTruth internal contracts
 
-Ground truth for everyone working in this repo. The spine (engine, db, server) is
-built and tested; build against these contracts, do not change them.
+This file records invariants that must remain true across product, API,
+extension, data, and operations work. `openapi/openapi.json` is the detailed HTTP
+source of truth; `npm run api:check` validates it.
 
-## Stack rules
+## Runtime and money
 
-- **Zero runtime dependencies.** Node >= 24, ES modules (`"type": "module"`), built-in `node:sqlite`.
-- All money is **integer USD cents** end to end. Format only at the display edge.
-- Server: `npm start` → http://localhost:4780 (env `PORT` overrides). Auto-seeds demo data on first boot.
-- Tests: `npm test` (node:test, files in `test/`). Seed: `npm run seed`. Keys: `npm run keygen -- "label" starter|pro`.
-- Honesty is a product rule: every projected number carries `certainty` and the UI must label non-listed values as estimates. Demo data is labeled demo data.
+- Node 24+, ES modules, built-in `node:sqlite`, zero production npm
+  dependencies. Browser-test tooling is development-only.
+- Every monetary amount is integer USD cents from input through persistence and
+  response. Float dollars exist only during final display formatting.
+- Report lines use `listed`, `typical`, or `estimated`. An unobserved value may
+  never be presented as an observed seller quote.
+- Observed listings and price points retain source, source label, certainty,
+  fetched time, observation flag, and evidence.
 
-## File ownership (do not write outside your area)
+## HTTP
 
-| Area | Paths |
-|---|---|
-| Spine (done, read-only) | `src/**`, `package.json`, `.gitignore` |
-| Frontend | `public/**` except `public/legal.html` |
-| Legal | `docs/legal/**`, `public/legal.html` |
-| Tests | `test/**` |
-| Extension | `extension/**` |
-| Business docs | `docs/BUSINESS.md`, `docs/API.md` |
-| Security docs | `docs/SECURITY.md` |
-| README | root `README.md` (spine author) |
+- `GET /api/health` is liveness. `GET /api/ready` is dependency/paid-launch
+  readiness and returns 503 when unsafe. `GET /api/openapi` serves the contract.
+- Every response includes `X-Request-Id`; API errors are
+  `{error,code,requestId}`. Limited routes expose standard `RateLimit-*` and
+  compatibility headers.
+- JSON request bodies are bounded. Static file traversal, open affiliate
+  redirects, untrusted forwarded hosts, unsafe request IDs, and log injection
+  are rejected/sanitized.
+- Public browser routes are unversioned; contracted B2B routes are `/api/v1/*`.
+  Breaking B2B changes require a new version.
 
-## HTTP API
+## Identity and account ownership
 
-All JSON. Public routes are rate-limited per IP (GET ~120 burst, POST ~20 burst — tests should stay under or create fresh app instances).
+- Passwordless login, session, CSRF, email verification, and unsubscribe tokens
+  are cryptographically random, expiring where appropriate, single-purpose,
+  and stored only as SHA-256 hashes.
+- Session cookie `pt_session` is HttpOnly/SameSite=Lax. CSRF cookie `pt_csrf` is
+  SameSite=Strict. Authenticated mutations require matching `X-CSRF-Token` plus
+  a same-origin check.
+- Watchlists, alerts, preferences, notification status, entitlements, API keys,
+  export, and deletion are scoped by immutable account ID—not caller-supplied
+  email.
+- API key secrets are shown once. Only hash, safe prefix, owner, lifecycle
+  timestamps, label, tier, and usage metadata persist. Rotation atomically
+  revokes the predecessor.
 
-| Route | Req | Resp (200 unless noted) |
-|---|---|---|
-| `GET /api/health` | — | `{ok, version}` |
-| `GET /api/meta` | — | `{name, version, currency, demoData, verticals[], options:{hotelMarkets, flightCarriers, ticketPlatforms, subscriptionPatterns}, partners}` — each option map is `{id: label}` for dropdowns |
-| `POST /api/analyze` | `{vertical, advertised_cents, context?}` | `Report` (below); 400 on bad input |
-| `GET /api/products` | — | `{products: [ProductPayload], demoData: true}` |
-| `GET /api/products/:id?days=30\|90` | — | `ProductPayload & {history: [{ts, advertised_cents, true_cents}], demoData}` ; 404 unknown |
-| `GET /api/history/:id?days=30\|90` | — | `{points, stats, days}` |
-| `POST /api/v1/track` | header `X-API-Key`; `{product_id, advertised_cents}` | 201 `{tracked, true_cents, usage}`; 422 outside the 0.25×–4× plausibility band (history-poisoning guard) |
-| `POST /api/alerts` | `{email, product_id, threshold_cents, premium?}` | 201 `{created, note}`; **402** `{error, upgrade}` when free limit (1) hit — this is the premium paywall |
-| `POST /api/admin/keys` | header `X-Admin-Token` = env `ADMIN_TOKEN`; `{label, tier}` | 201 `{key,…}`; 403 if env unset |
-| `POST /api/v1/analyze` | header `X-API-Key`; same body as analyze | `Report & {usage:{used_today, daily_limit, tier}}`; 401 bad key; 429 over quota (starter 100/day, pro 10k/day) |
-| `GET /api/v1/products/:id` | header `X-API-Key` | `ProductPayload & {history, usage}` |
-| `GET /api/v1/usage` | header `X-API-Key` | `{usage}` |
-| `GET /go/:partner?target=<https url>` | — | 200 HTML affiliate interstitial with disclosure; 400 non-https or hostname not in partner allowlist; 404 unknown partner |
+## Delivery, jobs, and idempotency
 
-`ProductPayload = { product:{id, vertical, name, url}, report: Report, stats: {days, n, low_cents, high_cents, avg_cents} | null, score: {score:0-100|null, label, reasons[]} }`
+- Notification email requires double opt-in. Unsubscribe, bounce, and complaint
+  states suppress future delivery.
+- Outbox payloads are encrypted at rest; worker jobs/outbox records use durable
+  leases, bounded retries/backoff, and terminal failure states.
+- Stripe webhooks verify raw-body signatures and dedupe by stored event ID.
+  Resend/Svix events verify raw body and signed headers and dedupe by provider
+  event ID.
+- Idempotency is operation-specific and documented in OpenAPI
+  `x-idempotency.strategy`. No generic inbound `Idempotency-Key` contract exists.
+  `/api/v1/track` is not retry-idempotent.
 
-## Report schema (`src/engine/analyze.js`)
+## Production safety
 
-```js
-{
-  vertical: 'hotel'|'flight'|'ticket'|'subscription'|'retail',
-  currency: 'USD',
-  advertised: { amount_cents, unit },       // per_night | per_fare | per_ticket | per_month | total
-  truePrice: { amount_cents, unit },        // per_night | per_fare | checkout_total | first_year | total
-  total: { amount_cents, label } | null,    // e.g. "3-night stay total", "First-year cost"
-  lineItems: [{ code, label, amount_cents, kind: 'base'|'fee'|'tax'|'addon',
-                certainty: 'listed'|'estimated'|'typical', note? }],
-  feeLoadPct: number,                        // hidden-cost % over advertised
-  confidence: 0.35–1,
-  assumptions: [string],
-  disclosures: [string],
-}
+- Paid launch requires `ENABLE_LIVE_BILLING=1`, HTTPS `PUBLIC_BASE_URL`, absolute
+  durable `PRICETRUTH_DB`, Resend/from/outbox/webhook values, Stripe secret,
+  webhook and all price IDs, enabled worker, and live sources for declared
+  `LAUNCH_VERTICALS`.
+- The launch gate and `/api/ready` fail closed. Mock billing and ephemeral
+  storage are never paid-production modes.
+- SQLite supports one active app/writer. Multiple replicas require managed
+  PostgreSQL and separately owned workers first.
+- Backups are consistent SQLite snapshots, integrity-checked, hashed, copied
+  off host, monitored for freshness, and restore-drilled.
+
+## Extension
+
+- Manifest V3; sole API permission is local `storage`; host access is limited to
+  declared, tested seller adapters.
+- Detection uses adapter selectors/exclusions before a bounded conservative
+  fallback. Weak, hidden, struck-through, and implausible candidates are quiet.
+- Fee calculation, preferences, and corrections remain local. There is no
+  network, analytics, remote code, or dynamic-code path. Feedback opens only on
+  explicit user action and never includes the shopping-page URL.
+- Store packages include correct icons, options, privacy disclosure, origin-bound
+  config, and the same fixture-tested adapter implementation.
+
+## Required verification
+
+```text
+npm run check
+npm test
+npm run build
+npm run smoke:security
+npm run smoke:performance
+npm run test:e2e
+npm run test:a11y
 ```
 
-Demo products (seeded, use these ids): `vegas-hotel` ($219 → $317/night), `lcc-flight` ($189 → $294),
-`arena-ticket` ($86 → $134 checkout), `stream-sub` ($9.99/mo → $179.88 first year), `anc-headphones`
-(retail, rich 90-day history: today $299, 30-day low $219, high $319).
-
-## Frontend constraints (CSP is enforced by the server)
-
-- `script-src 'self'` — **no inline `<script>`**, no eval, no external CDNs. All JS in `/app.js` (plus extra self-hosted files if needed).
-- Styles: external stylesheet `/styles.css`; inline `style=""` attributes allowed. No external fonts — system font stack.
-- `img-src 'self' data:` — inline SVG elements and data: URIs fine.
-- Static files live in `public/`; extensionless GETs serve `index.html` (SPA routing works); `.html .css .js .json .svg .png .ico .txt .webmanifest` are the servable types.
-- Design: **glance-first** — the big REAL PRICE verdict before the breakdown; details expandable below. Label every `typical`/`estimated` line as an estimate. Light + dark via `prefers-color-scheme`. Footer links `/legal.html` and affiliate disclosure. Mark demo data as demo.
-- Currency renderer must use integer-cents → string (`$1,234.56`); never float math.
-
-## Affiliate partners (`src/data/partners.json`)
-
-ids: `booking, expedia, hotels, kayak, ticketmaster, stubhub, spirit, example`. Frontend links use
-`/go/<partner>?target=<encoded https url>` — never link partner sites directly (the interstitial carries the FTC disclosure).
+CI also builds and probes the non-root container, audits production
+dependencies, and runs CodeQL. Manual accessibility, receipt accuracy, billing,
+provider-failure, backup/restore, incident, legal, and store gates remain
+required because automation cannot prove those outcomes.

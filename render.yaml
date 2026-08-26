@@ -1,11 +1,12 @@
-# Render blueprint — deploys PriceTruth as a persistent Node web service.
+# Render blueprint — deploys PriceTruth as a long-running Node web service.
 # In Render: New + → Blueprint → connect the PriceTruth repo → Apply.
 #
-# The app is fully usable with NO secrets set: every vertical falls back to a
-# clearly-labeled estimate and billing runs in simulated "mock" mode. Set the
-# secrets below (marked `sync: false`, so Render prompts for them in the
-# dashboard and they are NEVER stored in this repo) to switch individual data
-# sources and Stripe billing to live.
+# The public demo is usable with NO secrets set: unsupported verified searches
+# fail closed and hand off to manual price input. Accounts, notifications, and billing are explicitly
+# disabled on this ephemeral blueprint. Optional provider secrets below are
+# marked `sync: false`, so Render prompts for them in the dashboard and they
+# are NEVER stored in this repo. This demo blueprint must not receive Stripe
+# credentials; use `render.production.yaml` for paid deployment.
 #
 # ⚠ DATA DURABILITY. On the `free` plan the container filesystem is EPHEMERAL:
 # it is wiped on every deploy, restart, and idle spin-down/cold-start. The app
@@ -28,10 +29,10 @@ services:
     #   mountPath: /var/data
     #   sizeGB: 1
     # `npm run build` boots the whole app on loopback, checks health, and prints
-    # a live-vs-fallback report — a real preflight before the service starts.
-    buildCommand: npm install && npm run build
+    # a verified-vs-manual-only report — a real preflight before the service starts.
+    buildCommand: npm ci --ignore-scripts --no-audit --no-fund && npm run build
     startCommand: npm start
-    healthCheckPath: /api/health
+    healthCheckPath: /api/ready
     autoDeploy: true
     envVars:
       # --- required for correct hosting -------------------------------------
@@ -41,9 +42,23 @@ services:
         value: 0.0.0.0
       - key: NODE_ENV
         value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: ENABLE_ACCOUNTS
+        value: "0"
+      - key: ENABLE_LIVE_BILLING
+        value: "0"
+      - key: REQUIRE_EMAIL
+        value: "0"
+      - key: ENABLE_DEMO_SEED
+        value: "1"
+      - key: LAUNCH_VERTICALS
+        value: hotel,flight,ticket,subscription,retail
+      - key: SUBSCRIPTION_CATALOG_MAX_AGE_DAYS
+        value: "93"
       # PORT is injected by Render automatically; the server reads process.env.PORT.
       # Canonical origin for checkout success/cancel URLs, OG tags, and sitemap.
-      # Set to the service's public URL, e.g. https://pricetruth.onrender.com
+      # Set to the service's approved origin-only HTTPS URL.
       - key: PUBLIC_BASE_URL
         sync: false
       # SQLite location. Defaults to a file inside the (ephemeral on free plan)
@@ -57,31 +72,20 @@ services:
       - key: ADMIN_TOKEN
         sync: false
 
-      # --- Stripe billing (unset = simulated "mock" mode) -------------------
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
-      - key: STRIPE_PRICE_PREMIUM
-        sync: false
-      - key: STRIPE_PRICE_API_STARTER
-        sync: false
-      - key: STRIPE_PRICE_API_PRO
-        sync: false
-
-      # --- live data sources (unset = labeled estimated fallbacks) ----------
+      # --- verified data sources (unset = fail closed to manual input) ------
       # Ticketmaster Discovery API (free key): https://developer-acct.ticketmaster.com
       - key: TICKETMASTER_API_KEY
         sync: false
-      # Amadeus Self-Service (free test tier): https://developers.amadeus.com
-      # Powers both flights and hotels. Defaults to the test host; set
-      # AMADEUS_HOST=https://api.amadeus.com for production data.
+      # Amadeus Self-Service: https://developers.amadeus.com
+      # Powers both flights and hotels. The public provider intentionally
+      # rejects Amadeus sandbox/test inventory. Enter production credentials
+      # only; the non-secret origin is pinned to the exact production host.
       - key: AMADEUS_CLIENT_ID
         sync: false
       - key: AMADEUS_CLIENT_SECRET
         sync: false
       - key: AMADEUS_HOST
-        sync: false
+        value: https://api.amadeus.com
       # Optional generic retail feed: GET RETAIL_API_URL?q=... -> {price_cents,...}
       - key: RETAIL_API_URL
         sync: false

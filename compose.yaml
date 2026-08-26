@@ -1,0 +1,47 @@
+name: pricetruth
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pricetruth:${PRICETRUTH_IMAGE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: deploy/local.env
+        required: false
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4780
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:4780}
+      PRICETRUTH_DB: /var/lib/pricetruth/pricetruth.db
+      ENABLE_ACCOUNTS: "0"
+      ENABLE_LIVE_BILLING: "0"
+      ENABLE_DEMO_SEED: "1"
+      REQUIRE_EMAIL: "0"
+      LAUNCH_VERTICALS: hotel,flight,ticket,subscription,retail
+      SUBSCRIPTION_CATALOG_MAX_AGE_DAYS: "93"
+    ports:
+      - "${PRICETRUTH_BIND_ADDRESS:-127.0.0.1}:${PRICETRUTH_PORT:-4780}:4780"
+    volumes:
+      - pricetruth-data:/var/lib/pricetruth
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4780/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+
+volumes:
+  pricetruth-data:
+    name: ${PRICETRUTH_VOLUME_NAME:-pricetruth-data}

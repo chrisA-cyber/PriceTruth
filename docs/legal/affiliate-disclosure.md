@@ -1,64 +1,84 @@
-# Affiliate Disclosure — PriceTruth (prototype)
+# Affiliate-disclosure publication inputs
 
-**Effective date:** 2026-08-21 (prototype draft)
-**Operator:** PriceTruth (prototype), operated by [COMPANY ENTITY]
+> **INTERNAL PRELAUNCH WORKSHEET — NOT A PUBLIC DISCLOSURE**
+>
+> Do not publish this file or treat it as evidence that PriceTruth has an affiliate relationship.
+> It contains no partner, compensation, operator, or contact claims because those facts have not
+> been supplied here.
 
-This disclosure follows the FTC's Guides Concerning the Use of Endorsements and
-Testimonials in Advertising (16 CFR Part 255) and the FTC's guidance on
-disclosing material connections in affiliate marketing: if a link can earn us
-money, you get told **before** you rely on it — clearly, conspicuously, and
-every time.
+**Publication status:** Blocked until each material connection is documented and reviewed
 
-## The material connection, in one sentence
+**Worksheet revision:** August 25, 2026
 
-**If you click through to a partner site from PriceTruth and then book or buy,
-PriceTruth may earn a commission, at no extra cost to you.**
+## Fail-closed affiliate gate
 
-That commission is a "material connection" under FTC rules, and this page —
-plus the interstitial described below — is how we disclose it.
+Compensated links, partner tracking parameters, sponsored placement, and commission-generating
+redirects must remain disabled unless all of the following are complete:
 
-## How our outbound links work
+- A signed agreement identifies the partner or affiliate network and the compensation model.
+- The legal operator and a monitored support contact are confirmed.
+- Counsel or qualified compliance review approves the exact disclosure language and placement.
+- A clear disclosure appears before or adjacent to every compensated recommendation or link.
+- The destination, tracking behavior, and relationship are accurately named.
+- Product analysis, score, ordering, and fee estimates are demonstrably independent of payment.
+- The public disclosure has an effective date, change owner, and review schedule.
 
-- Every partner link on PriceTruth goes through our own redirect route
-  (`/go/<partner>`), never directly to the partner.
-- Clicking one **always** shows an interstitial page first. It tells you where
-  you are going and repeats the disclosure — "this is an affiliate link; if you
-  book or buy after clicking, PriceTruth may earn a commission at no extra cost
-  to you" — before you continue. The disclosure is unavoidable, not buried in a
-  footer or behind a hover.
-- The continue link carries `rel="sponsored nofollow noopener"`, marking the
-  link as compensated for search engines (per Google's link-attribute
-  guidelines) and preventing the destination page from scripting back to ours.
-- Only an allowlist of known partners can be linked, only over HTTPS, and the
-  affiliate tag we append identifies PriceTruth — it contains nothing about
-  you. Our `no-referrer` policy means the partner is not even told which page
-  you came from.
+No agreement means no compensated link. Do not ship sample tags, fake partner names, or generic
+claims that a commission exists.
 
-## Commissions never touch the numbers
+## Relationship record required for each partner
 
-This is the part we care most about, because PriceTruth's entire product is
-telling you the truth about prices:
+The operator must record:
 
-- **True-cost breakdowns, fee estimates, price history, and deal-quality scores
-  are computed before, and completely independently of, any partner
-  relationship.** The analysis engine's inputs are the advertised price, the
-  vertical, and our fee datasets; the scoring inputs are recorded price history
-  and fee load. Partner status is not an input to either. There is no code path
-  by which being (or not being) an affiliate partner changes a number we show.
-- Partners cannot pay for a better score, a lower true price, a hidden fee
-  line, or preferred placement in results.
-- If a partner's price is a bad deal, the score says so — and the affiliate
-  link sits under that verdict anyway.
+- Partner and affiliate-network legal names.
+- Agreement owner, signature date, start and end dates, and applicable territories.
+- Whether compensation is per click, lead, booking, sale, subscription, flat sponsorship, free
+  product, preferred access, or another benefit.
+- Cookie or attribution window, tracking parameters, data shared, and destination domains.
+- Product categories and interface placements where the relationship appears.
+- Restrictions on claims, trademarks, pricing, bidding, email, and social promotion.
+- Reversal, refund, chargeback, and commission-reporting rules.
+- Whether the partner has any review, ranking, or content rights.
 
-## Prototype status
+The public disclosure must use the real relationship record. This worksheet is not a substitute.
 
-PriceTruth is currently a prototype. The affiliate tags in the demo build are
-placeholders (`pricetruth-demo`), and **no live commission agreements exist
-yet**. We disclose as if the links were live because the mechanism is built and
-because the habit matters: if real affiliate relationships are signed, this
-page will name the programs, and the disclosure flow above is already in place
-on day one.
+## Product-integrity requirements
 
-## Questions
+Before activation, engineering and product owners must verify:
 
-[CONTACT EMAIL]
+- Affiliate or sponsorship state is not an input to total-cost calculations, uncertainty,
+  confidence, deal-quality scores, source freshness, or comparison ordering.
+- A partner cannot pay to hide a fee, improve a verdict, suppress a competing option, or change a
+  report's evidence.
+- Sponsored placement, if ever offered, is separately labeled and does not masquerade as an
+  independent ranking.
+- Redirects allow only approved HTTPS destinations and never include account or report data that
+  is not necessary for attribution.
+- The user sees the material-connection disclosure before leaving PriceTruth.
+- Links carry appropriate sponsored and opener-isolation attributes.
+
+Any failure blocks activation of the relationship.
+
+## Public disclosure inputs
+
+Counsel or the compliance owner must draft a separate public disclosure that states, in plain
+language and near the relevant action:
+
+- Who receives compensation.
+- Which links, placements, or recommendations can generate it.
+- What action may produce compensation.
+- Whether the user pays anything additional.
+- Whether non-cash benefits or sponsored placements exist.
+- That compensation does not control PriceTruth's analysis, when verified by the integrity tests.
+- How to reach the real operator with questions.
+
+Placement must be evaluated on desktop, mobile, keyboard navigation, screen readers, print/share
+views, outbound interstitials, and any extension surface. A footer-only disclosure is not enough
+for a material connection attached to a specific action.
+
+## Release evidence
+
+Retain the approved disclosure version, relationship record, screenshots of every placement,
+redirect allowlist test, ranking-independence test, reviewer, approval date, and next review date.
+Remove the relationship and its tracking promptly when the agreement ends or the disclosure is no
+longer accurate.

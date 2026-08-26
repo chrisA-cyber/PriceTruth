@@ -229,11 +229,23 @@
   font-size: 11px;
 }
 
+.pt-ext-unknown {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #f0b94f;
+  font-size: 11px;
+}
+
+.pt-ext-unknown li + li {
+  margin-top: 4px;
+}
+
 .pt-ext-card-foot {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid #22303c;
@@ -249,7 +261,89 @@
   text-decoration: underline;
 }
 
+.pt-ext-feedback {
+  color: #aab5bf;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pt-ext-feedback:focus-visible,
+.pt-ext-link:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: 2px;
+}
+
 .pt-ext-privacy {
+  flex-basis: 100%;
   color: #8b98a5;
   font-size: 10px;
+}
+
+.pt-ext-correction {
+  margin-top: 10px;
+  color: #aab5bf;
+  font-size: 11px;
+}
+
+.pt-ext-correction summary {
+  width: max-content;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pt-ext-correction-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.pt-ext-correction-input {
+  min-width: 0;
+  width: 105px;
+  height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #394956;
+  border-radius: 7px;
+  background: #111e28;
+  color: #e6edf3;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-ext-correction-apply {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid rgba(45, 212, 191, 0.55);
+  border-radius: 7px;
+  background: rgba(45, 212, 191, 0.12);
+  color: #2dd4bf;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pt-ext-correction-input:focus-visible,
+.pt-ext-correction-apply:focus-visible,
+.pt-ext-correction summary:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: 2px;
+}
+
+.pt-ext-correction-error {
+  min-height: 16px;
+  margin-top: 3px;
+  color: #f47174;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pt-ext-badge,
+  .pt-ext-close { transition: none; }
+}
+
+@media (max-width: 480px) {
+  .pt-ext-root { right: 10px; bottom: 10px; }
+  .pt-ext-card { max-width: calc(100vw - 20px); max-height: min(76vh, 560px); }
+  .pt-ext-badge { min-height: 44px; }
 }

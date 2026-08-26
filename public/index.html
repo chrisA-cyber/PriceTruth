@@ -4,37 +4,39 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PriceTruth — the actual price of anything online</title>
-  <meta name="description" content="True-cost breakdowns, price history, and deal-quality scores. PriceTruth shows what things actually cost — fees, taxes, and renewal traps included.">
-  <link rel="canonical" href="https://pricetruth.onrender.com/">
+  <meta name="description" content="True-cost breakdowns, price history, and deal-quality scores. Mandatory-fee-inclusive displayed prices stay intact while taxes, selected add-ons, and renewal terms remain explicit.">
   <meta name="theme-color" content="#0d9488">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="PriceTruth">
   <meta property="og:title" content="PriceTruth — the actual price of anything online">
-  <meta property="og:description" content="True-cost breakdowns, price history, and deal-quality scores — fees, taxes, and renewal traps included, before you check out.">
+  <meta property="og:description" content="PriceTruth preserves mandatory-fee-inclusive displayed prices and separates taxes, selected add-ons, and renewal terms before checkout.">
   <meta property="og:image" content="/og.svg">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="PriceTruth — the actual price of anything online">
-  <meta name="twitter:description" content="See what things actually cost: resort fees, bag fees, service charges, and renewal hikes included.">
+  <meta name="twitter:description" content="See displayed prices, taxes, selected add-ons, and renewal terms without inventing mandatory fees.">
   <meta name="twitter:image" content="/og.svg">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <a class="skip-link" href="#app">Skip to content</a>
+  <a class="skip-link" href="#app">Skip to main content</a>
   <header class="site-header">
     <nav class="site-nav" aria-label="Main navigation">
       <a class="brand" href="/" aria-label="PriceTruth home">
         <img class="brand-mark" src="/favicon.svg" alt="" width="28" height="28">
         <span class="brand-name">Price<span class="brand-accent">Truth</span></span>
       </a>
-      <div class="nav-links">
-        <a href="/" data-nav="/">Home</a>
-        <a href="/find" data-nav="/find">Find a price</a>
-        <a href="/analyze" data-nav="/analyze">Analyzer</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-navigation">
+        <span class="sr-only">Open navigation</span>
+        <span class="nav-toggle-lines" aria-hidden="true"></span>
+      </button>
+      <div class="nav-links" id="primary-navigation">
+        <a href="/find" data-nav="/find">Check a price</a>
+        <a href="/compare" data-nav="/compare">Compare</a>
         <a href="/extension" data-nav="/extension">Extension</a>
+        <a href="/api-docs" data-nav="/api-docs">Developers</a>
         <a href="/pricing" data-nav="/pricing">Pricing</a>
-        <a href="/api-docs" data-nav="/api-docs">API</a>
-        <a href="/account" data-nav="/account">Account</a>
+        <a class="nav-account" href="/account" data-nav="/account">Sign in</a>
       </div>
     </nav>
   </header>
@@ -47,15 +49,17 @@
       </div>
     </noscript>
   </main>
+  <div id="route-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <p class="footer-line"><span class="chip chip-demo">Prototype</span> The five seeded demo products use synthetic history for demonstration. A live search uses real data where a source is connected and clearly-labeled estimates otherwise; every result is labeled with its source and certainty.</p>
-      <p class="footer-line disclosure">Affiliate disclosure: some outbound links are affiliate links — PriceTruth may earn a commission at no extra cost to you. Commissions never change the prices, fees, or scores we show.</p>
+      <p class="footer-line"><strong>Know what is known.</strong> PriceTruth separates seller-listed prices, dated catalog data, and modeled costs. Always verify the final seller checkout before paying.</p>
+      <p class="footer-line disclosure">Compensated links are disabled unless a deployment publishes a specific disclosure beside the action. Compensation never changes the prices, fees, or scores we show.</p>
+      <p class="footer-line deployment-identity deployment-local" id="deployment-identity">This deployment does not offer commercial enrollment or a paid-service support channel.</p>
       <p class="footer-line footer-links">
-        <a href="/legal.html">Legal &amp; disclosures</a>
+        <a href="/legal.html">Privacy, terms &amp; disclosures</a>
         <span aria-hidden="true">·</span>
-        <a href="https://github.com/chrisA-cyber/PriceTruth" rel="noopener">GitHub</a>
+        <a href="https://github.com/chrisA-cyber/PriceTruth" rel="noopener">Source repository</a>
       </p>
     </div>
   </footer>

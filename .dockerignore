@@ -1,0 +1,19 @@
+.git
+.github
+.audit
+.backups
+# Exclude only runtime SQLite files. A broad `data` rule can also remove the
+# required src/data fee and subscription catalogs from the build context.
+data/*.db*
+dist
+node_modules
+test-results
+playwright-report
+coverage
+.env
+.env.*
+*.log
+docs
+test
+scripts
+deploy

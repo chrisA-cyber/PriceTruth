@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { RateLimiter, HttpError, validate, escapeHtml } from '../src/security.js';
+import { RateLimiter, HttpError, validate, escapeHtml, isPublicHostname } from '../src/security.js';
 
 // Every validator failure must be an HttpError with status 400 so the server
 // maps it straight to a client error.
@@ -23,6 +23,15 @@ describe('HttpError', () => {
     assert.ok(err instanceof Error);
     assert.equal(err.status, 402);
     assert.equal(err.message, 'payment required');
+  });
+});
+
+describe('production public-host boundary', () => {
+  it('accepts DNS-shaped public hosts and rejects literals, internal names, and placeholders', () => {
+    assert.equal(isPublicHostname('app.launch-operator.com'), true);
+    for (const host of ['localhost', '127.0.0.1', '::1', 'service.internal', 'deployment.example.invalid', 'example.com', 'sub.example.org', 'preview.test']) {
+      assert.equal(isPublicHostname(host), false, host);
+    }
   });
 });
 

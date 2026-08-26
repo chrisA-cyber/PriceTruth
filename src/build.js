@@ -2,7 +2,7 @@
 // boot. With zero runtime dependencies there is nothing to compile, so a
 // meaningful build for this project is: confirm the runtime, boot the whole
 // app in-memory, hit the health + meta endpoints, and print exactly which data
-// sources and billing are LIVE vs running on labeled fallbacks. Exits non-zero
+// sources are verified/live vs manual-only and whether billing is simulated. Exits non-zero
 // on any failure so CI / a deploy pipeline fails loudly.
 //
 // Usage: npm run build   (then: npm start)
@@ -46,13 +46,13 @@ async function main() {
     const SOURCE_KIND = {
       live: 'LIVE (real-time feed)',
       dataset: 'dataset (dated catalog snapshot)',
-      fallback: 'fallback (labeled estimate)',
+      fallback: 'MANUAL ONLY (verified search unavailable)',
     };
     console.log('\n  Data sources:');
     for (const [vertical, s] of Object.entries(meta.providers || {})) {
-      console.log(`    ${vertical.padEnd(13)} ${SOURCE_KIND[s.kind] || (s.live ? 'LIVE' : 'fallback (labeled estimate)')}`);
+      console.log(`    ${vertical.padEnd(13)} ${SOURCE_KIND[s.kind] || (s.live ? 'LIVE' : 'MANUAL ONLY')}`);
     }
-    console.log(`\n  Billing: ${meta.billing.mode.toUpperCase()}${meta.billing.mode === 'mock' ? ' (simulation — set STRIPE_SECRET_KEY to go live)' : ''}`);
+    console.log(`\n  Billing: ${meta.billing.mode.toUpperCase()}${meta.billing.mode === 'mock' ? ' (simulation — complete the paid-production launch gate to enable live billing)' : ''}`);
     for (const p of Object.values(meta.billing.plans || {})) {
       console.log(`    ${p.id.padEnd(12)} ${p.label.padEnd(12)} ${p.price}`);
     }

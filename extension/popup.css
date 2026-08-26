@@ -71,17 +71,21 @@ body {
   box-shadow: 0 0 6px var(--teal-soft);
 }
 
-.proto {
+.settings {
   margin-left: auto;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--teal-soft);
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--teal);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font: inherit;
+  font-size: 17px;
+  cursor: pointer;
 }
+
+.settings:hover { background: var(--teal-soft); }
+.settings:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
 
 /* --- inputs ---------------------------------------------------------------- */
 

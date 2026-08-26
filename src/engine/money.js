@@ -24,7 +24,7 @@ function pctOf(cents, pct) {
 }
 
 function sum(items) {
-  return items.reduce((acc, n) => acc + assertCents(n), 0);
+  return assertCents(items.reduce((acc, n) => acc + assertCents(n), 0), 'sum total');
 }
 
 function fmtUSD(cents, { compact = false } = {}) {

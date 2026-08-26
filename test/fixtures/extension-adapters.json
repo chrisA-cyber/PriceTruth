@@ -1,0 +1,62 @@
+{
+  "classifications": [
+    { "host": "www.booking.com", "path": "/hotel/us/meridian.html", "vertical": "hotel", "profile": "default", "adapter": "booking" },
+    { "host": "www.expedia.com", "path": "/Flights-Search", "vertical": "flight", "profile": "typical_legacy", "adapter": "expedia" },
+    { "host": "www.expedia.com", "path": "/Hotel-Search", "vertical": "hotel", "profile": "default", "adapter": "expedia" },
+    { "host": "checkout.ticketmaster.com", "path": "/event/abc", "vertical": "ticket", "profile": "ticketmaster", "adapter": "ticketmaster" },
+    { "host": "www.flyfrontier.com", "path": "/booking/select-flight", "vertical": "flight", "profile": "frontier", "adapter": "frontier" },
+    { "host": "evilbooking.com", "path": "/hotel", "vertical": null },
+    { "host": "booking.com.attacker.example", "path": "/", "vertical": null }
+  ],
+  "prices": [
+    { "text": "US$219", "cents": 21900 },
+    { "text": "US$ 1,299.00 per stay", "cents": 129900 },
+    { "text": "from USD 9.99/month", "cents": 999 },
+    { "text": "$219", "cents": null },
+    { "text": "C$123.45", "cents": null },
+    { "text": "CA$123.45", "cents": null },
+    { "text": "A$123.45", "cents": null },
+    { "text": "AU$123.45", "cents": null },
+    { "text": "NZ$123.45", "cents": null },
+    { "text": "SG$123.45", "cents": null },
+    { "text": "HK$123.45", "cents": null },
+    { "text": "€123.45", "cents": null },
+    { "text": "£123.45", "cents": null },
+    { "text": "US$0.50", "cents": null },
+    { "text": "1,299 EUR", "cents": null },
+    { "text": "US$999999999.00", "cents": null }
+  ],
+  "scopes": [
+    { "name": "US hotel path", "vertical": "hotel", "path": "/hotel/us/example", "text": "", "locale": "en-US", "allowed": true },
+    { "name": "US postal address", "vertical": "ticket", "path": "/event/abc", "text": "New York, NY 10001", "locale": "en", "allowed": true },
+    { "name": "US flight point of sale", "vertical": "flight", "path": "/flights", "text": "", "locale": "en-US", "allowed": true },
+    { "name": "locale alone cannot scope a hotel", "vertical": "hotel", "path": "/hotel/fr/example", "text": "Paris hotel", "locale": "en-US", "allowed": false },
+    { "name": "currency alone cannot scope a ticket", "vertical": "ticket", "path": "/event/abc", "text": "USD 86", "locale": "en-US", "allowed": false }
+  ],
+  "rankings": [
+    {
+      "name": "seller selector beats crossed-out and fine print",
+      "candidates": [
+        { "text": "US$279.00", "fontSize": 24, "hint": true, "selectorRank": 0, "struck": true, "visible": true },
+        { "text": "US$219.00 per night", "fontSize": 20, "hint": true, "selectorRank": 0, "visible": true, "contextText": "Price per night" },
+        { "text": "US$45.00 resort fee", "fontSize": 13, "hint": true, "visible": true, "contextText": "taxes and fees" }
+      ],
+      "cents": 21900
+    },
+    {
+      "name": "hidden nodes never win",
+      "candidates": [
+        { "text": "US$1.00", "fontSize": 72, "hint": true, "selectorRank": 0, "visible": false },
+        { "text": "US$86.00 each", "fontSize": 18, "hint": true, "selectorRank": 1, "visible": true, "contextText": "ticket price each" }
+      ],
+      "cents": 8600
+    },
+    {
+      "name": "quiet on weak fine-print-only pages",
+      "candidates": [
+        { "text": "US$2.00", "fontSize": 12, "hint": false, "visible": true, "contextText": "rewards value" }
+      ],
+      "cents": null
+    }
+  ]
+}

@@ -1,21 +1,43 @@
 // Shared helpers for live-data providers: a timeout-guarded JSON fetch (uses
-// Node 24's global fetch — no dependency) and deterministic fallback pricing so
-// that when no API key is configured the product is still fully usable and the
-// same query always yields the same clearly-labeled estimate.
+// Node 24's global fetch — no dependency) plus deterministic helpers retained
+// only for explicitly labeled illustrative fixtures. Shopper search fails closed.
 
-export async function httpJson(url, { method = 'GET', headers = {}, body, timeoutMs = 6000 } = {}) {
+export async function httpJson(url, {
+  method = 'GET',
+  headers = {},
+  body,
+  timeoutMs = 6000,
+  maxResponseBytes = Number(process.env.PROVIDER_RESPONSE_LIMIT_BYTES) || 1024 * 1024,
+} = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { method, headers, body, signal: ctrl.signal });
-    const text = await res.text();
+    const text = await limitedResponseText(res, maxResponseBytes, url);
     let json = null;
-    if (text) { try { json = JSON.parse(text); } catch { /* non-JSON error body */ } }
+    if (text) {
+      try { json = JSON.parse(text); }
+      catch {
+        if (res.ok) {
+          const error = new Error(`invalid JSON response from ${safeHost(url)}`);
+          error.status = 502;
+          error.code = 'UPSTREAM_INVALID_JSON';
+          throw error;
+        }
+        // Error bodies can be HTML/text; the status remains authoritative.
+      }
+    }
     if (!res.ok) {
       const err = new Error(`HTTP ${res.status} from ${safeHost(url)}`);
       err.status = res.status;
       err.body = json || text.slice(0, 500);
       throw err;
+    }
+    if (json === null) {
+      const error = new Error(`empty JSON response from ${safeHost(url)}`);
+      error.status = 502;
+      error.code = 'UPSTREAM_INVALID_JSON';
+      throw error;
     }
     return json;
   } catch (err) {
@@ -30,11 +52,59 @@ export async function httpJson(url, { method = 'GET', headers = {}, body, timeou
   }
 }
 
+async function limitedResponseText(response, maxResponseBytes, url) {
+  const limit = Math.min(8 * 1024 * 1024, Math.max(1024, Number(maxResponseBytes) || 1024 * 1024));
+  const declared = response.headers?.get?.('content-length');
+  if (declared !== null && declared !== undefined) {
+    const bytes = Number(declared);
+    if (Number.isFinite(bytes) && bytes > limit) {
+      await response.body?.cancel?.().catch(() => {});
+      throw upstreamPayloadError(url, limit);
+    }
+  }
+
+  // WHATWG fetch responses expose a byte ReadableStream. Consume it manually
+  // so a missing/lying Content-Length cannot allocate an unbounded buffer.
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) {
+          await reader.cancel().catch(() => {});
+          throw upstreamPayloadError(url, limit);
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+    return Buffer.concat(chunks, size).toString('utf8');
+  }
+
+  // Compatibility for small test/custom fetch implementations without a
+  // web-stream body. The post-read check still enforces the same contract.
+  const text = await response.text();
+  if (Buffer.byteLength(text, 'utf8') > limit) throw upstreamPayloadError(url, limit);
+  return text;
+}
+
+function upstreamPayloadError(url, limit) {
+  const error = new Error(`response exceeds ${limit} bytes from ${safeHost(url)}`);
+  error.status = 502;
+  error.code = 'UPSTREAM_PAYLOAD_TOO_LARGE';
+  return error;
+}
+
 function safeHost(url) {
   try { return new URL(url).host; } catch { return 'upstream'; }
 }
 
-// FNV-1a — stable across runs and platforms; used only for fallback pricing.
+// FNV-1a — stable across runs and platforms; used only for illustrative fixtures.
 export function hashStr(s) {
   let h = 2166136261 >>> 0;
   const str = String(s);

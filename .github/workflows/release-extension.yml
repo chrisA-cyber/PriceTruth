@@ -1,0 +1,39 @@
+name: Package browser extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: Production PriceTruth HTTPS origin
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run extension:check
+      - name: Build origin-bound store archive
+        env:
+          EXTENSION_APP_URL: ${{ inputs.app_url }}
+        run: |
+          npm run extension:package
+          sha256sum dist/pricetruth-extension.zip > dist/pricetruth-extension.zip.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pricetruth-extension-${{ github.sha }}
+          path: |
+            dist/pricetruth-extension.zip
+            dist/pricetruth-extension.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

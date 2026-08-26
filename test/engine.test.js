@@ -17,7 +17,7 @@ describe('analyze: pitch scenarios (exact demo-product contexts)', () => {
     const r = analyze({
       vertical: 'hotel',
       advertised_cents: 21900,
-      context: { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500 },
+      context: { market: 'las_vegas', nights: 3, resortFee_cents: 4500, tax_cents: 3800, parking_cents: 1500, mandatoryFeesIncluded: false, taxesIncluded: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Historical test fixture with mandatory lodging fees listed separately before the FTC rule.' },
     });
     assert.equal(r.vertical, 'hotel');
     assert.equal(r.currency, 'USD');
@@ -40,7 +40,7 @@ describe('analyze: pitch scenarios (exact demo-product contexts)', () => {
       advertised_cents: 18900,
       context: {
         carrier: 'typical_lcc', carryOn_cents: 4500, seat_cents: 3200,
-        channel: 'ota', bookingFee_cents: 800, taxesIncluded: false, taxes_cents: 2000,
+        channel: 'ota', bookingFee_cents: 800, taxesIncluded: false, taxes_cents: 2000, priceBasis: 'base_fare', feeEvidence: 'Test fixture explicitly represents a base fare before government taxes.',
       },
     });
     assert.deepEqual(r.advertised, { amount_cents: 18900, unit: 'per_fare' });
@@ -60,7 +60,7 @@ describe('analyze: pitch scenarios (exact demo-product contexts)', () => {
     const r = analyze({
       vertical: 'ticket',
       advertised_cents: 8600,
-      context: { platform: 'ticketmaster', serviceFee_cents: 2795, facility_cents: 700, orderProcessing_cents: 595, tax_cents: 710 },
+      context: { platform: 'ticketmaster', serviceFee_cents: 2795, facility_cents: 700, orderProcessing_cents: 595, tax_cents: 710, allInclusivePricing: false, priceBasis: 'pre_rule', asOf: '2024-12-01', feeEvidence: 'Historical test fixture with ticket fees listed separately before the FTC rule.' },
     });
     assert.deepEqual(r.advertised, { amount_cents: 8600, unit: 'per_ticket' });
     assert.deepEqual(r.truePrice, { amount_cents: 13400, unit: 'checkout_total' });
@@ -92,35 +92,29 @@ describe('analyze: pitch scenarios (exact demo-product contexts)', () => {
 });
 
 describe('analyze: default estimation paths', () => {
-  it('hotel with only market las_vegas estimates fees honestly', () => {
+  it('an unattested hotel display is a partial known subtotal and does not auto-select parking', () => {
     const r = analyze({ vertical: 'hotel', advertised_cents: 20000, context: { market: 'las_vegas' } });
     const resort = byCode(r, 'resort_fee');
     const taxes = byCode(r, 'taxes');
     const parking = byCode(r, 'parking');
-    // Typical resort fee for the market (95% prevalence -> included).
-    assert.equal(resort.amount_cents, 4500);
-    assert.equal(resort.certainty, 'typical');
-    assert.match(resort.note, /Las Vegas/);
-    // Occupancy tax estimated on room + resort fee (taxAppliesToResortFee).
-    assert.equal(taxes.amount_cents, pctOf(20000 + 4500, 13.38));
-    assert.equal(taxes.amount_cents, 3278);
-    assert.equal(taxes.certainty, 'estimated');
-    // Parking typical for the market (80% prevalence).
-    assert.equal(parking.amount_cents, 1800);
-    assert.equal(parking.certainty, 'typical');
-    assert.equal(r.truePrice.amount_cents, 20000 + 4500 + 3278 + 1800);
-    // Two typicals + one estimate: 1 - 0.08 - 0.12 - 0.08.
-    assert.equal(r.confidence, 0.72);
-    assert.ok(r.confidence < 1);
-    assert.ok(r.assumptions.length >= 2);
+    assert.equal(resort, undefined);
+    assert.equal(taxes, undefined);
+    assert.equal(parking, undefined);
+    assert.equal(r.truePrice.amount_cents, 20000);
+    assert.equal(r.priceInclusion.mandatoryFeesIncluded, null);
+    assert.equal(r.completeness.status, 'partial');
+    assert.deepEqual(r.completeness.unknownCosts.map((cost) => cost.code), ['mandatory-hotel-fees', 'hotel-taxes']);
+    assert.equal(r.confidence, 0.7);
   });
 
-  it('flight with defaults tags carrier-typical ancillaries as typical', () => {
+  it('flight with defaults does not auto-select optional carry-on or seat fees', () => {
     const r = analyze({ vertical: 'flight', advertised_cents: 15000, context: { carrier: 'spirit' } });
-    assert.equal(byCode(r, 'carry_on').certainty, 'typical');
-    assert.equal(byCode(r, 'carry_on').amount_cents, 6500);
-    assert.equal(byCode(r, 'seat').certainty, 'typical');
-    assert.ok(r.confidence < 1);
+    assert.equal(byCode(r, 'carry_on'), undefined);
+    assert.equal(byCode(r, 'seat'), undefined);
+    assert.equal(r.truePrice.amount_cents, 15000);
+    assert.equal(r.completeness.status, 'partial');
+    assert.deepEqual(r.completeness.unknownCosts.map((cost) => cost.code), ['mandatory-flight-charges']);
+    assert.equal(r.confidence, 0.85);
   });
 
   it('subscription with no context uses the default teaser pattern', () => {
@@ -135,9 +129,22 @@ describe('analyze: default estimation paths', () => {
 });
 
 describe('analyze: ticket quantity math', () => {
+  it('keeps an explicit tax in an unattested ticket subtotal while leaving mandatory fees unknown', () => {
+    const r = analyze({
+      vertical: 'ticket', advertised_cents: 8600,
+      context: { platform: 'ticketmaster', quantity: 1, tax_cents: 1250 },
+    });
+    assert.equal(byCode(r, 'tax').amount_cents, 1250);
+    assert.equal(r.truePrice.amount_cents, 9850);
+    assert.equal(r.total.label, 'Known subtotal');
+    assert.equal(r.completeness.status, 'partial');
+    assert.deepEqual(r.completeness.unknownCosts.map((cost) => cost.code), ['mandatory-ticket-fees']);
+  });
+
   it('adds the order-processing fee once per order, not per ticket', () => {
-    const r1 = analyze({ vertical: 'ticket', advertised_cents: 8600, context: { platform: 'ticketmaster', quantity: 1 } });
-    const r4 = analyze({ vertical: 'ticket', advertised_cents: 8600, context: { platform: 'ticketmaster', quantity: 4 } });
+    const evidence = { allInclusivePricing: false, priceBasis: 'face_value', feeEvidence: 'Fixture explicitly identifies a face-value-only non-current listing.' };
+    const r1 = analyze({ vertical: 'ticket', advertised_cents: 8600, context: { platform: 'ticketmaster', quantity: 1, ...evidence } });
+    const r4 = analyze({ vertical: 'ticket', advertised_cents: 8600, context: { platform: 'ticketmaster', quantity: 4, ...evidence } });
     assert.equal(byCode(r1, 'order_processing').amount_cents, 595);
     assert.equal(byCode(r4, 'order_processing').amount_cents, 595); // unchanged at qty 4
     // Per-ticket items do scale with quantity.
@@ -187,7 +194,7 @@ describe('analyze: subscription intro-month edges', () => {
 
 describe('analyze: retail', () => {
   it('applies taxPct as an estimated line on top of listed charges', () => {
-    const r = analyze({ vertical: 'retail', advertised_cents: 10000, context: { taxPct: 8.25 } });
+    const r = analyze({ vertical: 'retail', advertised_cents: 10000, context: { shipping_cents: 0, handling_cents: 0, taxPct: 8.25 } });
     const tax = byCode(r, 'tax');
     assert.equal(tax.amount_cents, 825);
     assert.equal(tax.certainty, 'estimated');
@@ -195,10 +202,21 @@ describe('analyze: retail', () => {
     assert.equal(r.confidence, 0.88);
   });
 
-  it('with no context the listed price is the true price', () => {
+  it('with no checkout context returns a partial known subtotal, never a complete all-in price', () => {
     const r = analyze({ vertical: 'retail', advertised_cents: 29900, context: {} });
     assert.equal(r.truePrice.amount_cents, 29900);
     assert.equal(r.feeLoadPct, 0);
+    assert.equal(r.completeness.status, 'partial');
+    assert.deepEqual(r.completeness.unknownCosts.map((item) => item.code), ['shipping', 'handling', 'sales-tax']);
+    assert.equal(r.confidence, 0.55);
+  });
+
+  it('keeps direct caller quotes listed unless an internal provider certainty is supplied', () => {
+    const direct = analyze({ vertical: 'retail', advertised_cents: 1000, context: {} });
+    const modeled = analyze({ vertical: 'retail', advertised_cents: 1000, context: {}, baseCertainty: 'estimated' });
+    assert.equal(direct.lineItems[0].certainty, 'listed');
+    assert.equal(modeled.lineItems[0].certainty, 'estimated');
+    assert.ok(modeled.confidence < direct.confidence);
   });
 });
 
@@ -223,6 +241,24 @@ describe('analyze: invalid inputs throw', () => {
       () => analyze({ vertical: 'hotel', advertised_cents: 20000, context: { resortFee_cents: -5 } }),
       RangeError,
     );
+  });
+  it('rejects aggregate report amounts above the API cents ceiling', () => {
+    assert.throws(() => analyze({
+      vertical: 'retail', advertised_cents: 1_000_000_000,
+      context: { shipping_cents: 1_000_000_000 },
+    }), RangeError);
+    assert.throws(() => analyze({
+      vertical: 'flight', advertised_cents: 200_000_000,
+      context: { travelers: 9, taxesIncluded: true },
+    }), RangeError);
+    assert.throws(() => analyze({
+      vertical: 'hotel', advertised_cents: 20_000_000,
+      context: { nights: 60, mandatoryFeesIncluded: true, taxesIncluded: true },
+    }), RangeError);
+    assert.throws(() => analyze({
+      vertical: 'subscription', advertised_cents: 20_000_000,
+      context: { pricingMode: 'stable_monthly', termMonths: 60 },
+    }), RangeError);
   });
   it('exports the five verticals', () => {
     assert.deepEqual(VERTICALS, ['hotel', 'flight', 'ticket', 'subscription', 'retail']);
@@ -344,7 +380,7 @@ describe('dealQuality', () => {
     const clean = dealQuality({ ...base, feeLoadPct: 0 });
     const feeHeavy = dealQuality({ ...base, feeLoadPct: 40 });
     assert.equal(clean.score - feeHeavy.score, 20); // full 20-point fee bucket lost
-    assert.ok(feeHeavy.reasons.some((s) => s.includes('Hidden fees')));
+    assert.ok(feeHeavy.reasons.some((s) => s.includes('Added costs')));
   });
 
   it('handles the degenerate flat window (high == low)', () => {

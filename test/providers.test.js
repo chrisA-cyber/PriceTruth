@@ -1,7 +1,5 @@
-// Provider registry tests: deterministic labeled fallbacks (so the product is
-// fully usable with zero API keys), the always-on subscription dataset, input
-// validation, and the "live source configured but failed → labeled degraded
-// fallback, never a crash and never mislabeled as live" contract.
+// Provider registry tests: fail-closed verified search, the always-on dated
+// subscription catalog, input validation, and safe upstream-failure errors.
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,17 +7,17 @@ import assert from 'node:assert/strict';
 import { searchListing, providerStatus, SEARCH_VERTICALS } from '../src/providers/index.js';
 import * as retail from '../src/providers/retail.js';
 import * as subscriptions from '../src/providers/subscriptions.js';
+import { normalizeFlightOffer } from '../src/providers/flights.js';
+import { normalizeHotelOffer } from '../src/providers/hotels.js';
+import { analyze } from '../src/engine/analyze.js';
 import { hashStr, bandCents, toSlug } from '../src/providers/http.js';
 
-describe('provider fallbacks are deterministic and labeled', () => {
-  it('the same query yields the same estimate across calls', async () => {
-    const a = await searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' });
-    const b = await searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' });
-    assert.equal(a.advertised_cents, b.advertised_cents);
-    assert.ok(Number.isInteger(a.advertised_cents));
-    assert.equal(a.certainty, 'estimated');
-    assert.equal(a.degraded, false);
-    assert.match(a.source, /^estimated:/);
+describe('verified search fails closed without a source', () => {
+  it('never substitutes a modeled retail price', async () => {
+    await assert.rejects(
+      () => searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' }),
+      (error) => error.status === 422 && error.code === 'PRICE_SOURCE_UNAVAILABLE' && !/RETAIL_API_URL/.test(error.message),
+    );
   });
 
   it('retail fallback stays within the advertised $19.99–$499.99 band', () => {
@@ -29,14 +27,13 @@ describe('provider fallbacks are deterministic and labeled', () => {
     }
   });
 
-  it('every vertical has a usable fallback with a non-negative integer price', async () => {
-    for (const vertical of SEARCH_VERTICALS) {
-      const listing = await searchListing({ vertical, q: 'test query two' });
-      assert.equal(listing.vertical, vertical);
-      assert.ok(Number.isInteger(listing.advertised_cents) && listing.advertised_cents >= 0);
-      assert.equal(listing.currency, 'USD');
-      assert.equal(typeof listing.sourceLabel, 'string');
-      assert.ok(['live', 'typical', 'estimated'].includes(listing.certainty));
+  it('returns a safe source-unavailable error for every unconfigured live vertical', async () => {
+    for (const vertical of SEARCH_VERTICALS.filter((value) => value !== 'subscription')) {
+      await assert.rejects(
+        () => searchListing({ vertical, q: 'test query two' }),
+        (error) => error.status === 422 && error.code === 'PRICE_SOURCE_UNAVAILABLE',
+        vertical,
+      );
     }
   });
 });
@@ -46,20 +43,107 @@ describe('subscription dataset', () => {
     assert.equal(subscriptions.configured(), true);
   });
 
-  it('matches a known plan by name and returns typical certainty', async () => {
+  it('matches a known plan by name and returns catalog certainty', async () => {
     const listing = await searchListing({ vertical: 'subscription', q: 'netflix' });
     assert.equal(listing.source, 'dataset:plans');
-    assert.equal(listing.certainty, 'typical');
+    assert.equal(listing.certainty, 'catalog');
     assert.ok(listing.advertised_cents > 0);
     assert.match(listing.sourceLabel, /snapshot/i);
   });
 
-  it('an unmatched query degrades to a clearly-labeled estimate (never a crash)', async () => {
-    const listing = await searchListing({ vertical: 'subscription', q: 'zxqwv-not-a-real-plan' });
-    // configured()===true but live() throws 404 → registry degrades to fallback.
-    assert.equal(listing.degraded, true);
-    assert.equal(listing.certainty, 'estimated');
-    assert.match(listing.sourceLabel, /live lookup unavailable/i);
+  it('returns no verified result for an unmatched query without inventing a price', async () => {
+    await assert.rejects(
+      () => searchListing({ vertical: 'subscription', q: 'zxqwv-not-a-real-plan' }),
+      (error) => error.status === 404 && error.code === 'NO_VERIFIED_RESULT',
+    );
+  });
+
+  it('fails closed for ambiguous generic terms and short brand fragments', async () => {
+    for (const query of ['premium', 'ne', 'dis', 'ph', 'ify']) {
+      await assert.rejects(
+        () => searchListing({ vertical: 'subscription', q: query }),
+        (error) => error.status === 404 && error.code === 'NO_VERIFIED_RESULT',
+        query,
+      );
+    }
+  });
+
+  it('rejects an expired catalog instead of returning a stale dollar amount', async () => {
+    await assert.rejects(
+      () => searchListing({
+        vertical: 'subscription',
+        q: 'netflix',
+        env: { SUBSCRIPTION_CATALOG_MAX_AGE_DAYS: '1' },
+        now: Date.parse('2026-08-27T00:00:01.000Z'),
+      }),
+      (error) => error.status === 424 && error.code === 'PRICE_SOURCE_FAILED' && !('listing' in error),
+    );
+  });
+
+  it('verifies every row and ages the catalog from its oldest as-of date', () => {
+    const fresh = subscriptions.catalogFreshness({ now: Date.parse('2026-08-26T12:00:00.000Z') });
+    assert.equal(fresh.ok, true);
+    assert.equal(fresh.status, 'fresh');
+    assert.equal(fresh.verifiedRows, fresh.rowCount);
+    assert.equal(fresh.oldestAsOf, '2026-08-25');
+    assert.equal(fresh.maxAgeDays, 93);
+
+    const stale = subscriptions.catalogFreshness({ now: Date.parse('2026-11-27T00:00:01.000Z') });
+    assert.equal(stale.ok, false);
+    assert.equal(stale.status, 'stale');
+    assert.equal(stale.stale, true);
+  });
+
+  it('fails closed for invalid age policy and malformed or future-dated rows', () => {
+    const invalidPolicy = subscriptions.catalogFreshness({
+      env: { SUBSCRIPTION_CATALOG_MAX_AGE_DAYS: '366' },
+      now: Date.parse('2026-08-26T12:00:00.000Z'),
+    });
+    assert.equal(invalidPolicy.ok, false);
+    assert.equal(invalidPolicy.configValid, false);
+
+    const invalidRows = subscriptions.catalogFreshness({
+      now: Date.parse('2026-08-26T12:00:00.000Z'),
+      catalogData: {
+        snapshot: '2026-08',
+        plans: [{
+          slug: 'future-plan', name: 'Future plan', advertised_cents: 999,
+          pricingMode: 'stable_monthly', termMonths: 12, sourceRegion: 'US',
+          asOf: '2026-08-27', sourceUrl: 'https://catalog.launch-operator.com/plans/future',
+        }],
+      },
+    });
+    assert.equal(invalidRows.ok, false);
+    assert.equal(invalidRows.status, 'invalid');
+    assert.equal(invalidRows.invalidRows, 1);
+  });
+});
+
+describe('live flight quote truth', () => {
+  it('uses the seller grand total without inventing unselected bags or seats', () => {
+    const listing = normalizeFlightOffer({
+      validatingAirlineCodes: ['NK'],
+      price: { currency: 'USD', base: '70.00', total: '100.00', grandTotal: '100.00' },
+    }, { origin: 'LAX', destination: 'LAS' });
+    assert.equal(listing.advertised_cents, 10000);
+    assert.equal(listing.context.carryOn, false);
+    assert.equal(listing.context.seatSelection, false);
+    const report = analyze({ vertical: 'flight', advertised_cents: listing.advertised_cents, context: listing.context });
+    assert.equal(report.truePrice.amount_cents, 10000);
+    assert.equal(report.lineItems.some((item) => ['carry_on', 'seat'].includes(item.code)), false);
+  });
+});
+
+describe('live hotel quote identity', () => {
+  it('keeps rolling stay searches one-time until dates and rate terms form an immutable identity', () => {
+    const listing = normalizeHotelOffer({
+      hotel: { hotelId: 'HTL123', name: 'Example Hotel' },
+      offers: [{ checkInDate: '2026-09-16', checkOutDate: '2026-09-19', price: { currency: 'USD', total: '600.00' } }],
+    }, { code: 'LAS', market: 'las_vegas' });
+    assert.equal(listing.providerIdentity, null);
+    assert.equal(listing.refreshable, false);
+    assert.equal(listing.alertEligible, false);
+    assert.equal(listing.context.quotedTotal_cents, 60000);
   });
 });
 
@@ -75,24 +159,23 @@ describe('searchListing input validation', () => {
   });
 });
 
-describe('live source failure degrades honestly', () => {
+describe('live source failure fails closed', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = realFetch;
     delete process.env.RETAIL_API_URL;
   });
 
-  it('configured live retail feed that errors falls back to a degraded estimate, not a 5xx', async () => {
+  it('configured live retail feed that errors returns a safe upstream failure', async () => {
     process.env.RETAIL_API_URL = 'https://feed.example.com/search';
     assert.equal(retail.configured(), true);
     // Force the outbound call to fail the way a dead upstream would.
     globalThis.fetch = async () => { throw new Error('ECONNREFUSED'); };
 
-    const listing = await searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' });
-    assert.equal(listing.degraded, true);
-    assert.equal(listing.certainty, 'estimated');
-    assert.match(listing.sourceLabel, /live lookup unavailable/i);
-    assert.ok(Number.isInteger(listing.advertised_cents));
+    await assert.rejects(
+      () => searchListing({ vertical: 'retail', q: 'sony wh-1000xm5' }),
+      (error) => error.status === 424 && error.code === 'PRICE_SOURCE_FAILED' && !/ECONNREFUSED/.test(error.message),
+    );
   });
 
   it('a configured live feed that succeeds is labeled live, not estimated', async () => {
@@ -107,6 +190,19 @@ describe('live source failure degrades honestly', () => {
     assert.equal(listing.advertised_cents, 12999);
     assert.equal(listing.source, 'live:retail-feed');
   });
+
+  it('does not promise refreshes or alerts for an empty provider identity', async () => {
+    process.env.RETAIL_API_URL = 'https://feed.example.com/search';
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ name: 'Unidentified product', id: '   ', price_cents: 12999, currency: 'USD' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+    const listing = await searchListing({ vertical: 'retail', q: 'unidentified product' });
+    assert.equal(listing.providerIdentity, null);
+    assert.equal(listing.refreshable, false);
+    assert.equal(listing.alertEligible, false);
+    assert.equal(listing.provenance.alertEligible, false);
+  });
 });
 
 describe('providerStatus exposes booleans only (no secrets)', () => {
@@ -116,13 +212,22 @@ describe('providerStatus exposes booleans only (no secrets)', () => {
       assert.equal(typeof status[vertical].live, 'boolean');
     }
     // subscription ships a dataset, so it is always "live" but of kind 'dataset'
-    // (not a real-time feed) — the UI uses this to avoid mislabeling it.
+    // (not a current provider feed) — the UI uses this to avoid mislabeling it.
     assert.equal(status.subscription.live, true);
     assert.equal(status.subscription.kind, 'dataset');
+    assert.equal(typeof status.subscription.freshness.ageSeconds, 'number');
     // A vertical with no key configured reports the 'fallback' kind.
     assert.equal(status.retail.kind, 'fallback');
+    assert.equal(status.retail.truthUsable, false);
     const serialized = JSON.stringify(status);
     assert.ok(!/secret|key|token|password/i.test(serialized));
+  });
+
+  it('marks the subscription source unusable once the verified catalog expires', () => {
+    const status = providerStatus({ now: Date.parse('2026-11-27T00:00:01.000Z') });
+    assert.equal(status.subscription.live, true, 'the dataset remains installed for honest local/demo use');
+    assert.equal(status.subscription.truthUsable, false);
+    assert.equal(status.subscription.freshness.status, 'stale');
   });
 });
 

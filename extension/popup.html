@@ -9,7 +9,7 @@
   <header class="head">
     <span class="dot" aria-hidden="true"></span>
     <h1>PriceTruth</h1>
-    <span class="proto">prototype</span>
+    <button id="settings" class="settings" type="button" title="Extension settings" aria-label="Open extension settings">⚙</button>
   </header>
 
   <main>
@@ -25,7 +25,7 @@
     </div>
 
     <div class="field">
-      <label for="price">Advertised price</label>
+      <label for="price">Displayed price (USD)</label>
       <div class="money-wrap">
         <span class="money-sign" aria-hidden="true">$</span>
         <input id="price" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="219.00" placeholder="0.00">
@@ -41,10 +41,11 @@
   </main>
 
   <footer>
-    <p class="privacy">Computes locally, sends nothing. This popup makes zero network requests — the fee model is bundled in the extension.</p>
-    <a href="http://localhost:4780" target="_blank" rel="noopener noreferrer">Open PriceTruth &rarr;</a>
+    <p class="privacy">U.S./USD calculator. Computes locally, sends nothing. This popup makes zero network requests — the price model is bundled in the extension.</p>
+    <a id="open-app" href="http://localhost:4780" target="_blank" rel="noopener noreferrer">Open PriceTruth &rarr;</a>
   </footer>
 
+  <script src="config.js"></script>
   <script src="feemodel.js"></script>
   <script src="popup.js"></script>
 </body>

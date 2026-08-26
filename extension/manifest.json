@@ -1,11 +1,27 @@
 {
   "manifest_version": 3,
-  "name": "PriceTruth — true cost before checkout",
-  "version": "0.1.0",
-  "description": "Shows what a price will actually cost you — typical resort fees, airline ancillaries, and ticket fees — right on the page. Prototype. 100% local: makes zero network requests.",
+  "name": "PriceTruth — price context before checkout",
+  "version": "1.0.0",
+  "description": "Review displayed prices without invented mandatory fees or auto-selected extras. Calculations stay in your browser.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "action": {
-    "default_title": "PriceTruth true-cost calculator",
-    "default_popup": "popup.html"
+    "default_title": "PriceTruth price-context calculator",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "content_scripts": [
     {
@@ -15,14 +31,21 @@
         "*://*.expedia.com/*",
         "*://*.ticketmaster.com/*",
         "*://*.stubhub.com/*",
+        "*://*.seatgeek.com/*",
         "*://*.spirit.com/*",
+        "*://*.flyfrontier.com/*",
+        "*://*.marriott.com/*",
+        "*://*.hilton.com/*",
         "*://example.com/*",
         "*://*.example.com/*",
         "*://localhost/extension-demo.html*"
       ],
-      "js": ["feemodel.js", "content.js"],
+      "js": ["config.js", "adapters.js", "feemodel.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  }
 }

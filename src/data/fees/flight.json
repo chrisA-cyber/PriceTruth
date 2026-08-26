@@ -35,6 +35,13 @@
       "checkedBag_cents": 4000, "checkedBagRange_cents": [3500, 4500],
       "seatSelection_cents": 2000, "seatSelectionRange_cents": [0, 5500],
       "prevalence": { "carryOnPct": 0, "seatPct": 50 }
+    },
+    "neutral": {
+      "label": "Unclassified carrier (optional fees not assumed)",
+      "carryOn_cents": 0, "carryOnRange_cents": [0, 0],
+      "checkedBag_cents": 0, "checkedBagRange_cents": [0, 0],
+      "seatSelection_cents": 0, "seatSelectionRange_cents": [0, 0],
+      "prevalence": { "carryOnPct": 0, "seatPct": 0 }
     }
   },
   "otaBookingFee": { "typical_cents": 800, "range_cents": [0, 2500] },

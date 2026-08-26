@@ -1,0 +1,8 @@
+{
+  "npmName": "@pricetruth/api-client",
+  "npmVersion": "1.0.0",
+  "supportsES6": true,
+  "typescriptThreePlus": true,
+  "useSingleRequestParameter": true,
+  "withInterfaces": true
+}

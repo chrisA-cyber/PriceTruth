@@ -16,6 +16,11 @@
   var profileLabelEl = document.getElementById('profile-label');
   var profileEl = document.getElementById('profile');
   var resultEl = document.getElementById('result');
+  var settingsEl = document.getElementById('settings');
+  var openAppEl = document.getElementById('open-app');
+
+  if (window.PTConfig && openAppEl) openAppEl.href = window.PTConfig.appUrl;
+  settingsEl.addEventListener('click', function () { chrome.runtime.openOptionsPage(); });
 
   var OPTIONS = FM.options();
   var PROFILE_LABELS = {
@@ -85,7 +90,7 @@
     var vertical = verticalEl.value;
     var cents = FM.dollarsToCents(priceEl.value);
     if (cents === null || cents === 0) {
-      renderEmpty('Enter the advertised price (e.g. 219.00) to see what it actually costs.');
+      renderEmpty('Enter the displayed price (e.g. 219.00) to review what is included and modeled.');
       return;
     }
 
@@ -97,30 +102,35 @@
 
     while (resultEl.firstChild) resultEl.removeChild(resultEl.firstChild);
 
-    // Glance-first verdict: the big real price before the breakdown.
+    var hasProjection = report.lineItems.some(function (line) { return line.certainty !== 'listed'; });
+    var isPartial = report.completeness && report.completeness.status === 'partial';
+    var unknownCount = isPartial ? report.completeness.unknownCosts.length : 0;
+
+    // Glance-first verdict: the modeled total before the breakdown.
     var verdict = el('div', 'verdict');
-    verdict.appendChild(el('div', 'verdict-label', 'Estimated real price'));
+    verdict.appendChild(el('div', 'verdict-label', isPartial ? 'Known subtotal' : hasProjection ? 'Modeled total' : 'Displayed total preserved'));
     var big = el('div', 'verdict-price');
-    big.appendChild(el('span', 'verdict-amount', '~' + FM.fmtUSD(report.truePrice.amount_cents)));
+    big.appendChild(el('span', 'verdict-amount', (hasProjection ? '~' : '') + FM.fmtUSD(report.truePrice.amount_cents)));
     big.appendChild(el('span', 'verdict-unit', ' ' + FM.unitLabel(report.truePrice.unit)));
     verdict.appendChild(big);
     var meta = el('div', 'verdict-meta');
     meta.appendChild(el('span', 'load' + (report.feeLoadPct > 0 ? ' load-hot' : ''),
-      report.feeLoadPct > 0 ? '+' + report.feeLoadPct + '% over advertised' : 'no hidden fees typical'));
+      isPartial ? unknownCount + ' checkout cost' + (unknownCount === 1 ? '' : 's') + ' unknown'
+        : report.feeLoadPct > 0 ? '+' + report.feeLoadPct + '% modeled' : 'displayed total preserved'));
     meta.appendChild(el('span', 'confidence', 'confidence ' + Math.round(report.confidence * 100) + '%'));
     verdict.appendChild(meta);
     resultEl.appendChild(verdict);
 
     // Breakdown
     var box = el('div', 'breakdown');
-    box.appendChild(moneyRow('Advertised', FM.fmtUSD(report.advertised.amount_cents) + FM.unitLabel(report.advertised.unit)));
+    box.appendChild(moneyRow('Displayed', FM.fmtUSD(report.advertised.amount_cents) + FM.unitLabel(report.advertised.unit)));
     var items = el('div', 'items');
     for (var i = 0; i < report.lineItems.length; i++) {
       var it = report.lineItems[i];
       items.appendChild(moneyRow(it.label, FM.fmtUSD(it.amount_cents), { tag: it.certainty, note: it.note }));
     }
     box.appendChild(items);
-    box.appendChild(moneyRow('Estimated real price', '~' + FM.fmtUSD(report.truePrice.amount_cents), { strong: true }));
+    box.appendChild(moneyRow(isPartial ? 'Known subtotal' : hasProjection ? 'Modeled total' : 'PriceTruth total', (hasProjection ? '~' : '') + FM.fmtUSD(report.truePrice.amount_cents), { strong: true }));
     if (report.total && report.total.amount_cents !== report.truePrice.amount_cents) {
       box.appendChild(moneyRow(report.total.label, FM.fmtUSD(report.total.amount_cents)));
     }
@@ -128,8 +138,18 @@
 
     // Honesty block: what was assumed, what the law says, what we can't know.
     var fine = el('div', 'fine');
-    fine.appendChild(el('p', 'honesty',
-      'Estimated from typical ' + report.profileLabel + ' fees — actual checkout may differ. Lines marked “typical” or “estimated” are projections, not quotes.'));
+    fine.appendChild(el('p', 'honesty', isPartial
+      ? 'This is a known subtotal. Unknown checkout costs stay visible instead of being guessed as $0.'
+      : hasProjection ? 'Every projected line is labeled “typical” or “estimated”; it is not a seller quote.'
+        : 'The displayed price is preserved. Mandatory costs are not invented and optional extras are not selected for you.'));
+    if (isPartial) {
+      var unknownList = el('ul', 'notes unknown-costs');
+      for (var u = 0; u < report.completeness.unknownCosts.length; u++) {
+        var gap = report.completeness.unknownCosts[u];
+        unknownList.appendChild(el('li', null, 'Unknown: ' + gap.label + ' — ' + gap.reason));
+      }
+      fine.appendChild(unknownList);
+    }
     var notes = report.assumptions.concat(report.disclosures);
     if (notes.length > 0) {
       var ul = el('ul', 'notes');

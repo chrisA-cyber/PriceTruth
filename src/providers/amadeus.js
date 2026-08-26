@@ -1,19 +1,49 @@
-// Shared Amadeus Self-Service client (flights + hotels). Free test tier:
-// https://developers.amadeus.com/ — set AMADEUS_CLIENT_ID and
-// AMADEUS_CLIENT_SECRET. Defaults to the test host; set AMADEUS_HOST to
-// https://api.amadeus.com for production credentials.
+// Shared Amadeus Self-Service client (flights + hotels).
+//
+// PriceTruth's public provider contract is production-only. Amadeus's test
+// environment returns realistic sandbox inventory, so allowing it through the
+// same path would turn a non-bookable fixture into a "live" verified quote.
+// Keep the origin locked and fail closed unless production credentials and the
+// exact production origin are configured together.
 
 import { httpJson } from './http.js';
 
-const HOST = () => process.env.AMADEUS_HOST || 'https://test.api.amadeus.com';
+export const PRODUCTION_ORIGIN = 'https://api.amadeus.com';
 
 let tokenCache = { value: null, expiresAt: 0 };
 
-export function configured() {
-  return Boolean(process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET);
+export function credentialsPresent(env = process.env) {
+  return Boolean(String(env.AMADEUS_CLIENT_ID || '').trim() && String(env.AMADEUS_CLIENT_SECRET || '').trim());
+}
+
+export function productionOriginConfigured(env = process.env) {
+  const raw = String(env.AMADEUS_HOST || '');
+  if (!raw || raw !== raw.trim()) return false;
+  try {
+    const url = new URL(raw);
+    return url.origin === PRODUCTION_ORIGIN && url.href === `${PRODUCTION_ORIGIN}/`;
+  } catch {
+    return false;
+  }
+}
+
+export function configured(env = process.env) {
+  return credentialsPresent(env) && productionOriginConfigured(env);
+}
+
+function requireProductionConfiguration(env = process.env) {
+  if (configured(env)) return PRODUCTION_ORIGIN;
+  const err = new Error('Amadeus production source is not configured');
+  err.status = 503;
+  err.code = 'AMADEUS_PRODUCTION_SOURCE_REQUIRED';
+  throw err;
 }
 
 export async function token() {
+  // Check before consulting the token cache. A token obtained from a previous
+  // production configuration must never let a later sandbox/misconfigured
+  // process state bypass the public-source boundary.
+  const host = requireProductionConfiguration();
   const now = Date.now();
   if (tokenCache.value && now < tokenCache.expiresAt) return tokenCache.value;
   const body = new URLSearchParams({
@@ -21,7 +51,7 @@ export async function token() {
     client_id: process.env.AMADEUS_CLIENT_ID,
     client_secret: process.env.AMADEUS_CLIENT_SECRET,
   }).toString();
-  const data = await httpJson(`${HOST()}/v1/security/oauth2/token`, {
+  const data = await httpJson(`${host}/v1/security/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
@@ -38,8 +68,9 @@ export async function token() {
 }
 
 export async function get(pathAndQuery) {
+  const host = requireProductionConfiguration();
   const t = await token();
-  return httpJson(`${HOST()}${pathAndQuery}`, {
+  return httpJson(`${host}${pathAndQuery}`, {
     headers: { Authorization: `Bearer ${t}` },
     timeoutMs: 8000,
   });

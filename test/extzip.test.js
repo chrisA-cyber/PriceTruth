@@ -5,7 +5,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 
-import { zip, crc32 } from '../src/extzip.js';
+import { zip, crc32, prepareExtensionManifest } from '../src/extzip.js';
 import { createApp } from '../src/server.js';
 
 // --- Minimal ZIP reader (local headers only) so tests can verify the bytes we
@@ -40,6 +40,26 @@ describe('extzip: crc32', () => {
     assert.equal(crc32(Buffer.from('hello')), 0x3610a686);
     assert.equal(crc32(Buffer.from('')), 0x00000000);
     assert.equal(crc32(Buffer.from('The quick brown fox jumps over the lazy dog')), 0x414fa339);
+  });
+});
+
+describe('extension release manifest', () => {
+  it('removes fixture hosts and limits distributed seller access to HTTPS', () => {
+    const source = { content_scripts: [{ matches: [
+      '*://*.booking.com/*', '*://example.com/*', '*://*.example.com/*',
+      '*://localhost/extension-demo.html*',
+    ] }] };
+    const release = prepareExtensionManifest(source, 'https://app.pricetruth.test');
+    assert.deepEqual(release.content_scripts[0].matches, [
+      'https://*.booking.com/*',
+      'https://app.pricetruth.test/extension-demo.html*',
+    ]);
+    assert.equal(source.content_scripts[0].matches[0], '*://*.booking.com/*', 'source manifest is not mutated');
+  });
+
+  it('keeps the exact HTTP localhost demo only for a local download', () => {
+    const release = prepareExtensionManifest({ content_scripts: [{ matches: ['*://example.com/*'] }] }, 'http://localhost:4780');
+    assert.deepEqual(release.content_scripts[0].matches, ['http://localhost/extension-demo.html*']);
   });
 });
 
@@ -109,17 +129,27 @@ describe('extzip: /download/extension.zip route', () => {
     const files = readZip(buf);
     const names = Object.keys(files);
     assert.ok(names.some((n) => n.endsWith('manifest.json')), 'bundle contains manifest.json');
+    assert.ok(names.some((n) => n.endsWith('config.js')), 'bundle contains runtime config');
+    assert.ok(names.some((n) => n.endsWith('adapters.js')), 'bundle contains seller adapters');
     assert.ok(names.some((n) => n.endsWith('content.js')), 'bundle contains content.js');
+    assert.ok(names.some((n) => n.endsWith('icons/icon-128.png')), 'bundle contains store icon');
+    const manifest = JSON.parse(files[names.find((n) => n.endsWith('manifest.json'))]);
+    const matches = manifest.content_scripts.flatMap((item) => item.matches || []);
+    assert.equal(matches.some((pattern) => /example\.com|localhost/i.test(pattern)), false, 'fixture hosts are stripped');
+    assert.equal(matches.some((pattern) => pattern.startsWith('*://')), false, 'distributed matches use an explicit scheme');
+    assert.ok(matches.some((pattern) => /^http:\/\/127\.0\.0\.1\/extension-demo/.test(pattern)), 'local bundle keeps only its exact demo host');
   });
 
   it('injects the requesting origin into the downloaded copy', async () => {
     const res = await fetch(app.base + '/download/extension.zip');
     const buf = Buffer.from(await res.arrayBuffer());
     const files = readZip(buf);
-    const content = files[Object.keys(files).find((n) => n.endsWith('content.js'))];
-    // The dev origin is 127.0.0.1:<port>; the injected APP_URL must reflect it,
-    // not the hard-coded localhost:4780 default from the source file.
-    assert.match(content, /var APP_URL = 'http:\/\/127\.0\.0\.1:\d+'/);
-    assert.doesNotMatch(content, /localhost:4780/);
+    const config = files[Object.keys(files).find((n) => n.endsWith('config.js'))];
+    // Runtime configuration is isolated from content-script logic: the bundle
+    // gets the requesting origin and demo host without mutating executable
+    // detection code or leaving the development origin behind.
+    assert.match(config, /appUrl: 'http:\/\/127\.0\.0\.1:\d+'/);
+    assert.match(config, /demoHost: '127\.0\.0\.1'/);
+    assert.doesNotMatch(config, /localhost:4780/);
   });
 });

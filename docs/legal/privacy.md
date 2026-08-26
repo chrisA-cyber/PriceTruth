@@ -1,170 +1,86 @@
-# Privacy Policy — PriceTruth (prototype)
+# Privacy policy publication inputs
 
-**Effective date:** 2026-08-21 (prototype draft)
-**Operator:** PriceTruth (prototype), operated by [COMPANY ENTITY]
-**Contact:** [CONTACT EMAIL]
+> **INTERNAL PRELAUNCH WORKSHEET — NOT A PRIVACY POLICY**
+>
+> Do not publish, link to, or present this file as terms offered to users. It records the
+> operator decisions and counsel review required before a real privacy policy can be issued.
+> It deliberately contains no assumed company, address, jurisdiction, or contact details.
 
-> **Prototype notice.** PriceTruth is a working product prototype. It ships with
-> demo data, runs against a local database, and has no production infrastructure.
-> This policy describes what the software actually does today, and flags where a
-> production deployment would need more. It is not legal advice.
+**Publication status:** Blocked pending operator input and legal review
 
-## The short version
+**Worksheet revision:** August 25, 2026
 
-- We do not have user accounts, and we do not want your data.
-- The **only** personal data this software stores is an **email address** — and
-  only if you choose to create a price alert.
-- No cookies. No trackers. No analytics. **Your browser** makes no third-party
-  requests — our strict Content-Security-Policy blocks them.
-- We never sell or share personal data. When live data sources or Stripe billing
-  are switched on, the **server** makes server-to-server calls to those providers
-  (see "Service providers" below) — never to advertisers or analytics.
-- Ask us to delete your alert email and we will.
+## Fail-closed launch gate
 
-## What we collect, and when
+Any public feature that creates an account, stores a personal identifier, sends a notification,
+or accepts payment must remain disabled until all of the following are true:
 
-**Price alerts (the only personal data).** If you create a price alert, we store
-the email address you enter, the product you chose, and your price threshold, so
-we can tell you when the true price drops below it. That is the entire record.
-It is collected only when you submit the alert form — browsing, analyzing
-prices, and viewing history collect nothing.
+- The legal operator name and service address are confirmed.
+- A monitored, private privacy/support contact is operational.
+- Launch regions and the operator's role in each region are decided.
+- Counsel has approved the public policy and its effective date.
+- The approved policy accurately matches the deployed configuration and subprocessors.
+- Retention, access, correction, export, deletion, and appeal workflows have been tested.
+- Material policy changes and consent renewal have named owners and procedures.
 
-In the current prototype, alerts are stored but **no email is ever sent** — there
-is no mail provider connected. A production version would send alert emails only
-after double opt-in confirmation (see "Changes" below and our internal
-compliance memo).
+Missing information is a launch blocker. Do not substitute a product name, a fake domain,
+an example address, or an assumed jurisdiction.
 
-**B2B API keys.** Partners using the commercial API get an API key. We store a
-label they choose (typically a company or project name), the key's tier, and a
-daily usage count. The key itself is stored only as a SHA-256 hash — we cannot
-recover it, and it never appears in logs.
+## Implementation inventory to validate
 
-**What we do *not* collect:**
+Before drafting, the operator and engineering owner must validate the deployed data map. The
+current application can process the following categories, depending on enabled features and
+configuration:
 
-- No accounts, usernames, passwords, or profiles.
-- No cookies of any kind — the server never sets one.
-- No analytics, pixels, fingerprinting, or session recording.
-- No third-party requests *from your browser*: every script, style, and image is
-  served from our own origin, and our Content-Security-Policy blocks everything
-  else. In its default configuration the server also makes no outbound calls at
-  all. When the operator connects live data sources or Stripe (see "Service
-  providers"), the server makes server-to-server calls to those providers only —
-  never to advertising, analytics, or data-broker services.
-- No IP address logging. IP addresses are used only in memory, for rate limiting
-  (abuse prevention). Each address is held in a short-lived bucket that a
-  background sweep removes within about 10–15 minutes of your last request, and
-  sooner under load. IP addresses are never written to disk.
-- No query strings or search terms in logs. Our access log records only the
-  HTTP method, path, status code, and response time.
-- Our pages send a `Referrer-Policy: no-referrer` header, so outbound clicks do
-  not tell the destination site what you were looking at here.
+- Account email, verification state, session metadata, and passwordless sign-in tokens.
+- Preferences such as email alerts, weekly digests, and timezone.
+- Saved products, watchlist records, price-alert thresholds, and notification status.
+- API-key metadata and usage records; raw keys are shown only during issuance or rotation.
+- Billing account, subscription, entitlement, and transaction metadata supplied by the payment
+  provider. Card details are handled by the payment provider, not the application.
+- Export and deletion requests, operational security records, and abuse-prevention metadata.
+- Search terms and product URLs submitted for analysis, including data sent to enabled price
+  providers when necessary to answer a request.
 
-## Why we collect it (purpose and lawful basis)
+For every category, record the exact fields, purpose, legal basis where applicable, source,
+recipients, storage location, encryption controls, retention period, deletion behavior, backup
+behavior, and whether it crosses a national border. Confirm the inventory against the deployed
+database schema, email service, billing provider, hosting platform, logs, analytics settings,
+and live price-provider configuration. Do not rely on this worksheet as the inventory itself.
 
-The alert email exists for exactly one purpose: sending you the price alert you
-asked for. We do not use it for marketing, do not enrich it, and do not combine
-it with other data (there is no other data).
+## Operator decisions required
 
-Where GDPR-style analysis applies, the lawful basis is **consent** (GDPR
-Art. 6(1)(a)): you type your email into the alert form and submit it. You can
-withdraw consent at any time by asking us to delete the alert.
+The public policy cannot be drafted responsibly until the operator supplies and counsel reviews:
 
-## Where it lives
+- Legal operator identity, physical or service address, and privacy contact channel.
+- Intended audience, minimum age, launch territories, and any excluded territories.
+- Controller, business, processor, or service-provider roles that apply.
+- The lawful basis and user-facing purpose for each processing activity.
+- Whether optional analytics, cookies, advertising, affiliate tracking, or profiling are enabled.
+- The complete subprocessor list, locations, transfer mechanisms, and change-notice process.
+- Concrete retention periods and backup-deletion limits for every data category.
+- Identity-verification steps and response deadlines for privacy-rights requests.
+- Complaint, regulator, representative, and data-protection-officer details where required.
+- Incident-notification ownership and region-specific notification timelines.
+- Sale, sharing, targeted-advertising, and sensitive-data positions for applicable US states.
+- Consent records, unsubscribe behavior, and suppression-list retention for email notifications.
 
-All data we store is kept in a local SQLite database file on the machine running
-the prototype. There are no analytics clouds and no data brokers. In the default
-configuration there are no third-party processors at all and the data never
-leaves the server it was submitted to. If the operator enables the optional
-integrations below, the specific data noted there is processed by those named
-providers; nothing else is transferred.
+## Required workflow evidence
 
-## Service providers (subprocessors)
+The launch approver must retain evidence that these paths work end to end:
 
-The prototype works fully with **no** external services connected. An operator
-may switch on these integrations; each receives only the data listed and only
-for the stated purpose:
+- Users can see the policy before supplying personal information or paying.
+- Account export contains the data categories the policy promises to provide.
+- Account deletion removes or de-identifies active records and documents backup handling.
+- Notification consent is verified and every message supports an effective unsubscribe path.
+- Revoked sessions and API keys stop working promptly.
+- Preference changes and alert deletion persist after a new session.
+- Support can authenticate a requester without collecting excessive additional data.
+- The deployed cookie and network behavior matches the published disclosures.
 
-- **Stripe** (payments) — only when billing is set to live mode. When you start a
-  checkout or open the billing portal, we send Stripe the email you enter and the
-  payment details you provide directly to Stripe; Stripe returns a subscription
-  status and (for API plans) triggers issuing your key. We never see or store
-  your card number. With billing in the default **mock** mode, no payment data
-  leaves the server and no card is charged.
-- **Data sources** (Ticketmaster, Amadeus, or an operator-configured retail feed)
-  — only when a given source is connected. To answer a "find a price" search, the
-  server sends your **search terms** for that vertical to the relevant provider.
-  Enter only what you are shopping for; do not put personal information in the
-  search box. With no source connected, searches are answered from local models
-  and nothing is sent anywhere.
+## Drafting and approval handoff
 
-## No sale, no sharing
-
-We do not sell personal information. We do not share it with advertisers, data
-brokers, or affiliate partners. The service providers named above act as
-processors on our behalf for the narrow purposes described, which is not a sale
-or cross-context sharing. Our affiliate links (see the
-[Affiliate Disclosure](affiliate-disclosure.md)) carry a partner tag, never your
-personal data.
-
-## Retention and deletion
-
-Alert records are kept while the alert is active. This prototype has no
-automated retention schedule yet; a production deployment would delete alerts
-after a defined inactivity period and would document that period here.
-
-**Deletion on request:** email [CONTACT EMAIL] from the address on the alert
-and we will delete every record tied to it. In the prototype, deletion means
-removing the rows from the local database (and, because the prototype is
-self-hosted, whoever runs the instance can simply delete the database file).
-
-## Your rights
-
-### GDPR (EU/EEA/UK visitors)
-
-This prototype is not marketed to, or intended for, the EU public, and it does
-not meet the scale where most GDPR machinery applies — but we honor its
-principles by design:
-
-- **Right of access:** ask [CONTACT EMAIL] and we will tell you exactly what we
-  hold about your email address (at most: the address, alert product(s), and
-  threshold(s)).
-- **Right to erasure:** ask and we delete it, as described above.
-- **Data minimization:** we built the system so there is almost nothing to
-  request. No profiling, no automated decision-making with legal effect, no
-  special-category data.
-
-A production EU-facing deployment would name a controller ([COMPANY ENTITY]),
-document processors, and provide a supervisory-authority complaint route.
-
-### CCPA/CPRA (California visitors)
-
-The prototype does not meet the CCPA's business thresholds, but our practices
-already exceed its requirements:
-
-- **We do not sell personal information and we do not "share" it** for
-  cross-context behavioral advertising. There is nothing to opt out of.
-- **Right to know:** same as access above — request at [CONTACT EMAIL].
-- **Right to delete:** same as deletion above.
-- We do not discriminate against anyone for exercising these rights.
-
-## Children's privacy
-
-PriceTruth is a price-analysis tool for people making purchases; it is not
-directed to children under 13 (or the applicable age in your region), and we do
-not knowingly collect personal information from children. If you believe a
-child has submitted an email address, contact [CONTACT EMAIL] and we will
-delete it.
-
-## Changes to this policy
-
-If the prototype grows into a product, this policy will change — for example, a
-production version would add a mail provider (a data processor), double opt-in
-for alerts, and a real retention schedule. Changes will be posted here with a
-new effective date. Material changes to how alert emails are used would require
-fresh consent, not a silent policy edit.
-
-## Contact
-
-Questions, access requests, or deletion requests: **[CONTACT EMAIL]**
-Operator of record: **[COMPANY ENTITY]** (placeholder — the prototype has no
-legal entity yet).
+Counsel should create a separate, publishable policy from the completed data inventory and
+operator decisions. The release record must identify the approved document version, reviewer,
+approval date, deployed URL, and configuration snapshot. This worksheet stays internal and must
+never be used as a substitute for that approved policy.

@@ -5,5 +5,3 @@ Disallow: /go/
 Disallow: /admin
 Disallow: /billing/
 Disallow: /download/
-
-Sitemap: https://pricetruth.onrender.com/sitemap.xml

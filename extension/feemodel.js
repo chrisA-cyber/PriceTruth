@@ -2,9 +2,10 @@
 
 // PriceTruth extension — bundled fee-model snapshot.
 //
-// This is a self-contained port of the "typical" values from the spine's
-// datasets (src/data/fees/*.json, snapshot 2026-08-21) plus the same integer
-// cents arithmetic the engine uses (src/engine/money.js, src/engine/analyze.js).
+// This is a self-contained, conservative price-context model. Current U.S.
+// hotel and live-event ticket displays are treated as mandatory-fee inclusive;
+// optional extras are never selected for the shopper. Historical profile data
+// remains bundled for labels and non-mandatory projections where applicable.
 // It exists so the extension NEVER has to make a network request: every
 // computation happens locally, in this file, in your browser.
 //
@@ -14,9 +15,9 @@
 //   - popup: <script src="feemodel.js"> before popup.js
 // It also exports via module.exports when run under Node, for sanity testing.
 //
-// Honesty rules (same as the spine): every line item carries a `certainty`
-// ('listed' | 'typical' | 'estimated') and anything not 'listed' is a
-// projection that must be labeled as such in the UI.
+// Honesty rules: every line item carries a `certainty` ('listed' | 'typical' |
+// 'estimated'), anything not 'listed' is labeled as a projection, and the
+// model never invents a mandatory fee or selects an optional add-on.
 
 (function (global) {
   var SNAPSHOT = {
@@ -175,18 +176,20 @@
     return t;
   }
 
-  function confidenceFrom(lineItems) {
+  function confidenceFrom(lineItems, unknownCosts) {
     var c = 1.0;
     for (var i = 0; i < lineItems.length; i++) {
       if (lineItems[i].certainty === 'typical') c -= 0.08;
       else if (lineItems[i].certainty === 'estimated') c -= 0.12;
     }
+    c -= Math.min(0.45, (unknownCosts || []).length * 0.15);
     return Math.max(0.35, Math.round(c * 100) / 100);
   }
 
   function finishReport(r) {
     var equiv = r.advertisedEquiv_cents != null ? r.advertisedEquiv_cents : r.advertised_cents;
     var feeLoadPct = equiv > 0 ? Math.round(((r.truePrice_cents - equiv) / equiv) * 1000) / 10 : 0;
+    var unknownCosts = r.unknownCosts || [];
     return {
       vertical: r.vertical,
       currency: 'USD',
@@ -195,7 +198,11 @@
       total: r.total || null,
       lineItems: r.lineItems,
       feeLoadPct: feeLoadPct,
-      confidence: confidenceFrom(r.lineItems),
+      confidence: confidenceFrom(r.lineItems, unknownCosts),
+      completeness: {
+        status: unknownCosts.length ? 'partial' : 'complete',
+        unknownCosts: unknownCosts,
+      },
       assumptions: r.assumptions,
       disclosures: r.disclosures,
       profileLabel: r.profileLabel,
@@ -204,28 +211,7 @@
 
   function analyzeHotel(advertised_cents, marketId) {
     var market = HOTEL_MARKETS[marketId] || HOTEL_MARKETS.default;
-    var assumptions = [];
-    var items = [item('room', 'Room rate', advertised_cents, 'base', 'listed')];
-
-    var resortFee = 0;
-    if (market.resortFeePrevalencePct >= 50) {
-      resortFee = market.resortFee_cents;
-      items.push(item('resort_fee', 'Resort fee', resortFee, 'fee', 'typical',
-        market.resortFeePrevalencePct + '% of ' + market.label + ' hotels charge one'));
-      assumptions.push('Resort fee is the ' + market.label + ' typical; this property’s actual fee may differ.');
-    } else {
-      assumptions.push('No resort fee assumed for this market (' + market.resortFeePrevalencePct + '% prevalence); some properties still charge one.');
-    }
-
-    var taxBase = advertised_cents + (market.taxAppliesToResortFee ? resortFee : 0);
-    var taxes = pctOf(taxBase, market.occupancyTaxPct) + market.occupancyFlatPerNight_cents;
-    items.push(item('taxes', 'Occupancy taxes (' + market.occupancyTaxPct + '%)', taxes, 'tax', 'estimated'));
-
-    if (market.parkingPrevalencePct >= 50) {
-      items.push(item('parking', 'Parking', market.parking_cents, 'addon', 'typical',
-        'Typical for ' + market.label + '; skip if you won’t have a car'));
-      assumptions.push('Parking included at the market-typical rate; remove it if you are not driving.');
-    }
+    var items = [item('room', 'Displayed room price', advertised_cents, 'base', 'listed')];
 
     return finishReport({
       vertical: 'hotel',
@@ -234,28 +220,20 @@
       truePrice_cents: sumItems(items),
       trueUnit: 'per_night',
       lineItems: items,
-      assumptions: assumptions,
-      disclosures: ['Mandatory fees must now be shown in the advertised price under the FTC junk-fee rule; many quotes still surface them only at checkout.'],
+      assumptions: [
+        'The displayed price is treated as including mandatory hotel fees.',
+        'Optional parking is not selected for the shopper.',
+        'Lodging taxes are unknown because the page adapter does not provide an exact tax attestation.',
+      ],
+      disclosures: ['For current U.S. short-term lodging offers, mandatory fees belong in the displayed price. Confirm expressly excluded taxes and optional extras with the seller.'],
+      unknownCosts: [{ code: 'hotel-taxes', label: 'Hotel taxes', reason: 'The detected price does not attest that lodging taxes are included.' }],
       profileLabel: market.label,
     });
   }
 
   function analyzeFlight(advertised_cents, carrierId) {
     var carrier = FLIGHT_CARRIERS[carrierId] || FLIGHT_CARRIERS.typical_lcc;
-    var assumptions = [];
-    var items = [item('fare', 'Base fare (' + carrier.label + ')', advertised_cents, 'base', 'listed')];
-
-    if (carrier.carryOn_cents > 0) {
-      items.push(item('carry_on', 'Carry-on bag', carrier.carryOn_cents, 'fee', 'typical',
-        carrier.carryOnPrevalencePct + '% of travelers on this carrier type pay it'));
-      assumptions.push('Assumes one carry-on; a personal item only avoids this fee.');
-    }
-    if (carrier.seatSelection_cents > 0) {
-      items.push(item('seat', 'Seat selection', carrier.seatSelection_cents, 'fee', 'typical',
-        carrier.seatPrevalencePct + '% pay to pick a seat; skip to be assigned one free at check-in'));
-      assumptions.push('Includes a standard seat-selection fee; airlines assign a free seat at check-in if you skip it.');
-    }
-    assumptions.push('No checked bags assumed; checked-bag fees add more.');
+    var items = [item('fare', 'Displayed fare (' + carrier.label + ')', advertised_cents, 'base', 'listed')];
 
     return finishReport({
       vertical: 'flight',
@@ -264,29 +242,18 @@
       truePrice_cents: sumItems(items),
       trueUnit: 'per_fare',
       lineItems: items,
-      assumptions: assumptions,
-      disclosures: ['US advertised fares already include base taxes (DOT full-fare rule); ancillary fees are the drip.'],
+      assumptions: [
+        'No bags, seat selection, or other optional extras are selected for the shopper.',
+        'Add only the extras you choose after checking the airline’s current price.',
+      ],
+      disclosures: ['U.S. advertised fares include mandatory taxes and fees. Optional airline services vary and are not added automatically.'],
       profileLabel: carrier.label,
     });
   }
 
   function analyzeTicket(advertised_cents, platformId) {
     var platform = TICKET_PLATFORMS[platformId] || TICKET_PLATFORMS.default;
-    var assumptions = [];
-    var items = [item('face', 'Face value', advertised_cents, 'base', 'listed')];
-
-    var pct = platform.serviceFeePct;
-    items.push(item('service_fee', 'Service fee (~' + pct + '% of face)', pctOf(advertised_cents, pct), 'fee', 'typical',
-      platform.label + ' service fees typically run ' + platform.serviceFeeRangePct[0] + '–' + platform.serviceFeeRangePct[1] + '% of face value'));
-    assumptions.push('Service fee estimated at the ' + platform.label + ' typical rate; the exact fee appears only at checkout.');
-
-    if (platform.facility_cents > 0) {
-      items.push(item('facility', 'Facility charge', platform.facility_cents, 'fee', 'typical'));
-    }
-    if (platform.orderProcessing_cents > 0) {
-      items.push(item('order_processing', 'Order processing (per order)', platform.orderProcessing_cents, 'fee', 'typical'));
-    }
-    assumptions.push('One ticket, sales tax not included.');
+    var items = [item('ticket', 'Displayed ticket price', advertised_cents, 'base', 'listed')];
 
     var checkout = sumItems(items);
     return finishReport({
@@ -297,8 +264,13 @@
       trueUnit: 'checkout_total',
       total: { amount_cents: checkout, label: 'Checkout estimate' },
       lineItems: items,
-      assumptions: assumptions,
-      disclosures: ['Live-event tickets must be advertised all-in under the FTC junk-fee rule; resale platforms and add-ons still vary at checkout.'],
+      assumptions: [
+        'The displayed price is treated as including mandatory ticket fees.',
+        'Optional add-ons are not selected for the shopper.',
+        'Ticket taxes are unknown because the page adapter does not provide an exact tax attestation.',
+      ],
+      disclosures: ['For current U.S. live-event ticket offers, mandatory fees belong in the displayed price. Confirm expressly excluded taxes and optional extras with the seller.'],
+      unknownCosts: [{ code: 'ticket-taxes', label: 'Ticket taxes', reason: 'The detected price does not attest that government taxes are included.' }],
       profileLabel: platform.label,
     });
   }
@@ -350,10 +322,14 @@
       trueUnit: 'total',
       lineItems: items,
       assumptions: [
-        'Shipping assumed free; add it if this seller charges shipping.',
-        'Sales tax not included (varies by state).',
+        'Shipping, handling, and sales tax are unknown; the popup has no seller checkout quote or tax jurisdiction.',
       ],
-      disclosures: [],
+      disclosures: ['This amount is the known listed subtotal, not a guaranteed checkout total.'],
+      unknownCosts: [
+        { code: 'shipping', label: 'Shipping', reason: 'The seller shipping quote was not supplied.' },
+        { code: 'handling', label: 'Handling or mandatory seller charges', reason: 'The seller did not attest that no other mandatory charge applies.' },
+        { code: 'sales-tax', label: 'Sales tax', reason: 'The checkout jurisdiction and tax rate are unknown.' },
+      ],
       profileLabel: 'Retail listing',
     });
   }

@@ -1,137 +1,113 @@
-# Terms of Service — PriceTruth (prototype)
+# Terms-of-service publication inputs
 
-**Effective date:** 2026-08-21 (prototype draft)
-**Operator:** PriceTruth (prototype), operated by [COMPANY ENTITY]
-**Contact:** [CONTACT EMAIL]
+> **INTERNAL PRELAUNCH WORKSHEET — NOT TERMS OF SERVICE**
+>
+> This file is an operator and counsel handoff. Do not publish it, link users to it, or treat it
+> as an agreement. It intentionally makes no claim about the operator, governing law, venue,
+> dispute process, or support contact.
 
-> **Prototype notice.** PriceTruth is a working prototype seeded with demo data.
-> These terms are drafted honestly for what the software is today. They are not
-> legal advice, and a production launch would have counsel review them.
+**Publication status:** Blocked pending operator input and legal approval
 
-## 1. What PriceTruth is
+**Worksheet revision:** August 25, 2026
 
-PriceTruth shows **price estimates and price history for information only**. It
-takes an advertised price (a hotel's nightly rate, an airline's base fare, a
-ticket's face price, a subscription's teaser rate, a retail listing) and
-projects the **true cost** — the total you would likely pay after typical fees,
-taxes, and add-ons — together with price history and a deal-quality score.
+## Fail-closed commercial gate
 
-By using the site or the API you accept these terms. If you do not accept them,
-do not use the service.
+Do not accept payment, issue paid API access, market a subscription as available, or require a
+user to accept terms until a separate public agreement has been approved and deployed. Release
+approval requires:
 
-## 2. Accuracy disclaimer — read this one
+- Confirmed legal operator identity and a monitored private support channel.
+- Counsel-approved effective date, launch territories, governing law, venue, and dispute terms.
+- Accurate plan names, prices, renewal rules, cancellation path, refund policy, taxes, and trial
+  behavior for the exact production billing configuration.
+- An acceptance record tied to the published version for every account that must accept terms.
+- Consistency among the terms, privacy policy, checkout, account dashboard, API documentation,
+  affiliate disclosure, and actual application behavior.
 
-**PriceTruth produces estimates, not quotes.**
+If any item is unknown, paid and account-bound commercial features remain unavailable. Never fill
+the gap with a product name, sample entity, assumed location, or fake address.
 
-- Every cost breakdown labels each line item as `listed` (a value you or the
-  seller supplied), `typical` (a market-typical figure from our datasets), or
-  `estimated` (a computed heuristic). **Any line labeled typical or estimated
-  is a projection and may differ — sometimes materially — from what a specific
-  seller actually charges.**
-- Every report carries a confidence value and a list of assumptions. Read them.
-- Fee datasets, tax rates, and platform fee structures change; ours may lag.
-- The prototype ships with **demo data**: demo products, simulated price
-  history, and placeholder partner tags. It is labeled as such in the product
-  and should be treated as illustrative.
-- **The only price that matters is the one on the seller's checkout page at the
-  moment you pay. Always verify there before buying.**
+## Service facts to validate before drafting
 
-PriceTruth is not the seller, has no control over sellers' prices, and does not
-guarantee that any price, fee, tax, availability, or score shown is accurate,
-complete, or current.
+The public agreement should describe only behavior verified in the production release:
 
-## 3. Not advice
+- PriceTruth estimates total cost from advertised prices and labels listed, typical, and
+  estimated components.
+- Reports may include source, freshness, confidence, assumptions, price history, and a
+  deal-quality score; none is a seller quote or guarantee.
+- Users must verify price, availability, taxes, fees, and purchase terms at the seller's checkout.
+- Accounts can manage saved products, alerts, preferences, API keys, exports, billing state, and
+  deletion when those features are enabled.
+- API access is authenticated, metered, subject to documented quotas, and revocable.
+- Third-party sellers, price providers, email providers, payment processors, and affiliate
+  destinations operate under their own terms.
 
-PriceTruth provides general information, not advice. Nothing on this site is
-financial advice, investment advice, purchasing advice, tax advice, or a
-recommendation to buy or not buy any particular product or service. Deal-quality
-scores are an automated summary of price history and fee load, not a judgment
-about what you should do. Decisions you make based on the service are your own.
+Engineering and product owners must re-validate this list against the release candidate. Remove
+or qualify anything the deployed service does not support.
 
-## 4. No warranty
+## Operator and counsel decisions required
 
-The service is provided **"as is" and "as available"**, without warranty of any
-kind, express or implied, including merchantability, fitness for a particular
-purpose, accuracy, and non-infringement. We do not warrant that the service
-will be uninterrupted, error-free, or secure. This is a prototype; expect rough
-edges, resets, and downtime.
+### Contract formation and eligibility
 
-## 5. Limitation of liability
+- Legal operator name, service address, support route, and capacity to contract.
+- Minimum user age and any business-account authority requirements.
+- The exact clickwrap or other acceptance flow and version-record retention.
+- Countries or regions where the service will and will not be offered.
 
-To the maximum extent permitted by law, [COMPANY ENTITY] and its contributors
-are not liable for any indirect, incidental, special, consequential, or
-punitive damages, or any loss of profits, savings, data, or goodwill, arising
-from or related to your use of the service — including purchase decisions made
-in reliance on estimates, scores, or price history. To the extent liability
-cannot be excluded, total aggregate liability is capped at the greater of the
-amount you paid us in the twelve months before the claim (for the free
-prototype: zero) and US $50. Some jurisdictions do not allow these exclusions,
-so parts of this section may not apply to you.
+### Product, accounts, and acceptable use
 
-## 6. Acceptable use
+- Scope of free, paid, API, alert, export, and account-deletion services.
+- Account security duties, passwordless access expectations, suspension, and recovery.
+- Prohibited automation, scraping, abuse, circumvention, resale, and misleading use.
+- API-key ownership, confidentiality, rotation, quota, revocation, and service-level position.
+- Rules for user-submitted URLs, search terms, and any future content.
 
-You agree not to:
+### Fees, renewals, cancellation, and refunds
 
-- scrape, bulk-harvest, or systematically extract data from the site or API,
-  or use automated traffic beyond the documented, enforced rate limits;
-- circumvent or attempt to circumvent rate limits, quotas, API-key controls, or
-  any security measure;
-- share, resell, or publish an API key, or use another party's key;
-- misrepresent PriceTruth output as a seller's official price or as a quote;
-- use the service for any unlawful purpose, or to build a service that
-  misleads consumers about prices — the exact thing this project exists to fix.
+- Currency, taxes, billing interval, auto-renewal language, trials, and promotional pricing.
+- Cancellation effective date, continued access, refunds, credits, failed payments, and disputes.
+- Notice and consent requirements for price or plan changes.
+- Payment-provider responsibilities and the operator's billing-support process.
 
-Rate limits are enforced per client on public routes and per key on the API;
-requests over the limit receive HTTP 429 and should back off.
+No price, refund, or renewal language may be copied from this worksheet; it must come from the
+approved commercial policy and match the configured checkout.
 
-## 7. Price alerts
+### Risk allocation
 
-Creating an alert stores your email and threshold as described in the
-[Privacy Policy](privacy.md). In the prototype no email is sent. Free usage is
-limited (currently one alert); the premium tier shown in the product is a demo
-of the intended paywall, not a live paid service — no payment is collected.
+Counsel must draft the warranty disclaimer, limitation of liability, indemnity, force-majeure,
+consumer-rights savings language, and any business-user terms for the selected jurisdictions.
+Engineering documentation can explain uncertainty but cannot decide enforceability or liability
+caps.
 
-## 8. B2B API
+### Intellectual property and third parties
 
-Commercial API access is governed by these terms plus the API documentation
-(`docs/API.md`), which covers tiers, daily quotas, and key handling. Keys are
-shown once at creation and stored only as hashes; you are responsible for
-keeping your key secret. We may throttle, suspend, or revoke keys that exceed
-quota or violate Section 6. Production B2B use would be covered by a separate
-signed agreement.
+- Ownership and licensing of the software, methodology, datasets, report content, and branding.
+- Permitted use of reports and API output.
+- Treatment of seller names, marks, links, data licenses, and takedown requests.
+- Affiliate relationships and the separation of compensation from analysis and ranking.
 
-## 9. Affiliate links and third-party sites
+### Termination, changes, and disputes
 
-Outbound partner links pass through an interstitial that discloses our
-affiliate relationship (see the
-[Affiliate Disclosure](affiliate-disclosure.md)). Third-party sites have their
-own terms and privacy policies; we are not responsible for them.
+- User and operator termination rights, data consequences, and surviving provisions.
+- Notice and acceptance process for material changes.
+- Governing law, forum, arbitration, class-action, informal-resolution, and consumer protections,
+  chosen by counsel for the actual operator and launch regions.
+- A monitored legal-notice route and service-of-process instructions.
 
-## 10. Intellectual property
+## Prepublication verification
 
-The PriceTruth software, datasets, and content are the property of
-[COMPANY ENTITY] or its licensors. Sellers' names and trademarks belong to
-their owners; their appearance here is nominative — to identify whose prices
-are being analyzed — and implies no affiliation or endorsement.
+The launch approver must verify that:
 
-## 11. Termination
+- Every signup and paid checkout links the approved agreement before acceptance.
+- The accepted version and timestamp can be retrieved for support or disputes.
+- Pricing, cancellation, export, deletion, and API-key controls work as described.
+- Uncertainty and seller-verification language is clear in every report.
+- The public document names the real operator, contact route, effective date, and applicable
+  jurisdictional terms.
+- No internal note, sample value, draft marker, or unreviewed promise is present.
 
-We may suspend or terminate access (including revoking API keys) at any time
-for violation of these terms, abuse, or legal necessity. You may stop using the
-service at any time; ask us to delete your alert data per the Privacy Policy.
+## Drafting and approval handoff
 
-## 12. Changes
-
-We may update these terms as the prototype evolves. The current version, with
-its effective date, is always at this location. Continued use after a change is
-acceptance of the new terms.
-
-## 13. Governing law
-
-These terms are governed by the laws of [GOVERNING LAW JURISDICTION], without
-regard to conflict-of-law rules, and disputes belong to the courts of
-[VENUE]. (Placeholders — to be fixed when [COMPANY ENTITY] exists.)
-
-## 14. Contact
-
-**[CONTACT EMAIL]**
+Counsel should create a separate publishable agreement from the confirmed operator decisions and
+release behavior. Record its reviewer, approval date, version, deployed URL, and acceptance-flow
+test in the launch evidence. This worksheet remains internal.

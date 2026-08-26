@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PriceTruth extension settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark" aria-hidden="true"></span>
+      <div><h1>PriceTruth settings</h1><p>Choose where the local price-context overlay appears.</p></div>
+    </header>
+    <section aria-labelledby="sites-title">
+      <h2 id="sites-title">Supported sites</h2>
+      <div id="site-list" class="site-list"></div>
+    </section>
+    <section aria-labelledby="privacy-title">
+      <h2 id="privacy-title">Privacy</h2>
+      <p>Price detection and local calculations run entirely inside your browser. These preferences stay in Chrome's extension storage. PriceTruth does not transmit pages, products, or detected prices.</p>
+    </section>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+  <script src="adapters.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

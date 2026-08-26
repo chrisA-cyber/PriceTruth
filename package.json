@@ -1,6 +1,6 @@
 {
   "name": "pricetruth",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "PriceTruth — the actual price of anything online. True-cost breakdowns, price history, and deal quality scores.",
   "license": "UNLICENSED",
   "private": true,
@@ -11,9 +11,28 @@
   "scripts": {
     "start": "node src/server.js",
     "build": "node src/build.js",
+    "build:netlify": "npm run check && npm run build && node scripts/build-netlify.mjs",
     "seed": "node src/seed.js",
     "keygen": "node src/keygen.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node scripts/check-source.mjs && node scripts/validate-openapi.mjs && node scripts/validate-extension.mjs",
+    "test:e2e": "playwright test --grep-invert @a11y",
+    "test:a11y": "playwright test --grep @a11y",
+    "test:browser": "playwright test",
+    "smoke:security": "node scripts/security-smoke.mjs",
+    "smoke:performance": "node scripts/performance-smoke.mjs",
+    "launch:gate": "node scripts/launch-gate.mjs",
+    "deploy:verify": "node scripts/postdeploy-check.mjs",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:restore": "node scripts/db-restore.mjs",
+    "extension:icons": "node scripts/generate-extension-icons.mjs",
+    "extension:check": "node scripts/validate-extension.mjs && node --test test/extension-adapters.test.js test/extension-package.test.js test/extzip.test.js",
+    "extension:package": "node scripts/package-extension.mjs",
+    "api:check": "node scripts/validate-openapi.mjs"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1"
+  }
 }

@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Core quality gates (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - name: Build the fail-closed Netlify frontend bundle
+        env:
+          PRICETRUTH_BACKEND_ORIGIN: https://backend.pricetruth.app
+          PRICETRUTH_SITE_ORIGIN: https://pricetruth.netlify.app
+        run: npm run build:netlify
+      - run: npm run smoke:security
+      - run: npm run smoke:performance
+      - name: Validate and package the browser extension
+        run: |
+          npm run extension:check
+          npm run extension:package -- --app-url=https://ci.pricetruth.invalid
+          test -s dist/pricetruth-extension.zip
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+  browser:
+    name: Browser and accessibility gates
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm run test:a11y
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-${{ github.run_attempt }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+  container:
+    name: Reproducible container
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build non-root production image
+        run: docker build --pull --tag pricetruth:ci .
+      - name: Verify image user and runtime contract
+        run: |
+          test "$(docker image inspect pricetruth:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker run --detach --name pricetruth-ci \
+            --publish 127.0.0.1:4780:4780 \
+            --tmpfs /tmp \
+            --volume pricetruth-ci-data:/var/lib/pricetruth \
+            --env PUBLIC_BASE_URL=http://localhost:4780 \
+            --env ENABLE_ACCOUNTS=0 \
+            --env ENABLE_LIVE_BILLING=0 \
+            --env ENABLE_DEMO_SEED=1 \
+            --env LAUNCH_VERTICALS=hotel,flight,ticket,subscription,retail \
+            --env SUBSCRIPTION_CATALOG_MAX_AGE_DAYS=93 \
+            pricetruth:ci
+          for attempt in $(seq 1 30); do
+            if node -e "Promise.all(['/','/api/health','/api/ready','/api/meta','/api/openapi'].map(p=>fetch('http://127.0.0.1:4780'+p))).then(rs=>process.exit(rs.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"; then exit 0; fi
+            sleep 1
+          done
+          docker logs pricetruth-ci
+          exit 1
+      - name: Container logs
+        if: failure()
+        run: docker logs pricetruth-ci || true
+      - name: Remove container smoke resources
+        if: always()
+        run: |
+          docker rm --force pricetruth-ci || true
+          docker volume rm pricetruth-ci-data || true

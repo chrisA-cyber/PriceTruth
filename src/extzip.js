@@ -26,6 +26,27 @@ function crc32(buf) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+// Produce the manifest that is safe to distribute. The source manifest keeps
+// localhost/example fixtures so contributors can exercise the unpacked build;
+// those hosts must never reach a store or production download. Seller access is
+// HTTPS-only, while the one app demo route is scoped to the exact deployment.
+function prepareExtensionManifest(manifest, appOrigin) {
+  const url = new URL(appOrigin);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new TypeError('extension app origin must be HTTP(S) without credentials');
+  }
+  const clone = structuredClone(manifest);
+  for (const content of clone.content_scripts || []) {
+    const sellerMatches = (content.matches || [])
+      .filter((pattern) => !/example\.com|localhost|127\.0\.0\.1/i.test(pattern))
+      .map((pattern) => pattern.startsWith('*://') ? `https://${pattern.slice(4)}` : pattern);
+    const demoScheme = url.protocol === 'https:' ? 'https:' : 'http:';
+    const demoPattern = `${demoScheme}//${url.hostname}/extension-demo.html*`;
+    content.matches = [...new Set([...sellerMatches, demoPattern])];
+  }
+  return clone;
+}
+
 // entries: [{ name: 'dir/file.ext', data: Buffer|string }]
 function zip(entries) {
   const localChunks = [];
@@ -95,4 +116,4 @@ function zip(entries) {
   return Buffer.concat([localBuf, centralBuf, eocd]);
 }
 
-export { zip, crc32 };
+export { zip, crc32, prepareExtensionManifest };

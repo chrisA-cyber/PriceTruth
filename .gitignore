@@ -9,5 +9,17 @@ node_modules/
 .env.*
 *.log
 
+# Generated release, test, and recovery artifacts
+dist/
+.audit/
+.backups/
+.netlify/
+coverage/
+playwright-report/
+test-results/
+deploy/local.env
+deploy/staging.env
+deploy/production.env
+
 # Local editor / preview tooling
 .claude/

@@ -29,7 +29,7 @@ $317/night (fee load 44.7%), a "$189" LCC fare is $294, an "$86" arena ticket is
 checkout, a "$9.99/month" streaming plan is $179.88 in year one.
 
 Honesty is the product mechanic, not a marketing line: every line item carries
-`certainty: listed | typical | estimated`, every report carries a `confidence` score and an
+`certainty: listed | catalog | typical | estimated`, every report carries a `confidence` score and an
 `assumptions` array, and demo data is labeled demo data.
 
 ## 2. Why now
@@ -37,7 +37,7 @@ Honesty is the product mechanic, not a marketing line: every line item carries
 **The FTC junk-fee rule (16 CFR Part 464, effective May 2025)** requires all-in advertised
 pricing for hotels and live-event tickets. Three consequences, all favorable:
 
-1. **Consumer salience.** Hidden fees are now a named, regulated consumer harm. "What does it
+1. **Consumer salience.** Mandatory add-on fees and drip pricing are now named, regulated consumer harms. "What does it
    really cost?" is a mainstream question with regulatory air cover.
 2. **A compliance-verification market.** Someone has to check whether an advertised price is
    actually all-in. A tool that independently reconstructs the true price is the natural
@@ -84,9 +84,9 @@ capability, not traction — the billing ledger is empty.
 | # | Stream | Model | Unit economics | Time to first $ |
 |---|---|---|---|---|
 | 1 | Travel affiliate commissions | 3–6% of booking value via partner links; disclosure interstitial + open-redirect guard shipped (`/go/:partner`) **[rails wired · needs partner approval]** | ~$80 per converted $2,000 booking at 4% | Days–weeks |
-| 2 | B2B pricing API | Starter $49/mo, Pro $399/mo — Stripe checkout → minted API key against shipped quotas **[wired · mock mode]** | ≥1.6¢/call (starter), ≥0.13¢/call (pro) | Weeks |
+| 2 | B2B pricing API | Starter $49/mo, Pro $399/mo — Stripe checkout → minted API key against shipped quotas **[implemented · live only after launch gates pass]** | ≥1.6¢/call (starter), ≥0.13¢/call (pro) | Weeks |
 | 3 | Alternative-recommendation referrals | Referral fee when we surface a cheaper/equal alternative (incl. "book direct") **[shares #1 rails]** | Same rails as #1; higher trust value | Weeks–months |
-| 4 | Premium subscription | $4/mo — multiple alerts, deal digests, price-drop push; Stripe checkout → server-enforced entitlement (402 paywall + `/pricing` shipped) **[wired · mock mode]** | 1–3% of MAU converting | Months |
+| 4 | Premium subscription | $4/mo — multiple periodic alerts after verified catalog/source updates plus a weekly email digest; delivery follows source cadence. Stripe checkout → server-enforced entitlement (402 paywall + `/pricing` shipped) **[implemented · live only after launch gates pass]** | 1–3% of MAU converting | Months |
 | 5 | Travel-site referral placements | Flat-fee partner placements, always disclosure-labeled **[future]** | $500–$2,000/mo per placement (assumed) | Months |
 | 6 | Fee-index reports | Anonymized aggregate fee data for media/researchers **[future]** | $2k–$10k per report (assumed) | Quarters |
 
@@ -105,7 +105,7 @@ addressed in §7.
 `/pricing` page drive Stripe Checkout; a signature-verified `checkout.session.completed` webhook
 grants premium server-side (`accounts` table, `db.isPremium`); the customer self-serves through
 the billing portal (`src/billing.js`, `src/server.js`). In mock mode this runs locally, labeled
-a simulation. Still gated on real alert emails (§8) before anyone should actually pay — and no
+a simulation. Paid launch remains gated on production email, legal, storage, reconciliation, and operational readiness before anyone should actually pay — and no
 one has: zero subscribers today.
 
 **Worked example — B2B API (stream 2).** Starter $49/mo buys up to 100 calls/day (≤3,000/mo →
@@ -115,8 +115,8 @@ floor of ~1.6¢/call); Pro $399/mo buys 10,000/day (≤300,000/mo → ~0.13¢/ca
 the key is revealed **exactly once** on the success page (claim-once via `/api/billing/claim`,
 backed by the `pending_keys` table) → usage is metered and quota-enforced per tier. Compute cost
 per call is negligible; the real COGS is data acquisition (§7). One design partner on Starter is
-a credible first B2B dollar inside 90 days — the machinery to accept that dollar now exists
-(mock today; live the moment real Stripe keys are set). No paying API customer exists yet.
+a credible first B2B dollar inside 90 days — the machinery to accept that dollar now exists,
+but live enrollment remains closed until every launch gate passes. No paying API customer exists yet.
 
 **Revenue visibility.** An owner-only, token-gated admin dashboard (`/admin`, backed by
 `GET /api/admin/metrics`, gated by `ADMIN_TOKEN`) surfaces gross revenue, 7- and 30-day windows,
@@ -186,21 +186,20 @@ reports (stream 6) and the Hidden Fee Index (GTM) are the same asset, monetized 
   (token-gated) over an idempotent `billing_events` ledger (`stripe_ref UNIQUE`).
 - **Affiliate rails.** Disclosure interstitial + open-redirect guard (`/go/:partner`).
 
-**Going live is a configuration step, not a build step.** It requires: setting `STRIPE_SECRET_KEY`,
-the webhook signing secret, and the three `STRIPE_PRICE_*` price IDs; verifying the webhook
-endpoint in the Stripe dashboard; and wiring real data-provider keys for full live price
-coverage (the engine ships labeled demo data otherwise). Until then everything above runs in
-mock mode and earns nothing.
+**Going live is a controlled operational milestone.** It requires all paid-launch readiness
+checks to pass: approved operator/legal metadata, durable storage and backups, verified email,
+workers and reconciliation, the reviewed Stripe product/price catalog and webhook, applicable
+tax setup, and truthful data-source scope. Local simulation never counts as revenue.
 
 **Still genuinely remaining (not built):** real customers and a first real dollar; data-provider
-contracts at scale; transactional alert-email delivery; dunning / failed-payment recovery;
-tax/VAT handling (e.g. Stripe Tax); and SOC-type compliance. These stay future work below.
+contracts at scale; production deliverability monitoring; dunning / failed-payment recovery;
+operator tax registrations and jurisdiction-specific tax review; and SOC-type compliance. Automatic-tax calculation is a technical control, not proof of compliance. These stay future work below.
 
 | Days | Milestone | Definition of done |
 |---|---|---|
-| 1–30 | **Real data, two verticals** | Live collectors for hotels (resort fees + taxes for ~200 tracked properties) and subscriptions (intro/renewal pricing for ~100 services), replacing demo seeds; `demoData` flag retired on covered products. Affiliate program applications submitted (Booking, Expedia — rails already shipped). |
-| 31–60 | **Alerts for real + extension shipped** | Transactional email provider wired to the existing alerts table, **double opt-in** (already committed to in `docs/legal/privacy.md`), unsubscribe in every mail. Extension listed in the Chrome Web Store. First programmatic SEO pages live (per-hotel resort-fee pages from the fee dataset). |
-| 61–90 | **First dollars, both motions** | First affiliate conversion tracked end-to-end. One B2B design partner live on Starter ($49/mo) with a case study — accepting the payment now needs only real Stripe keys, since the checkout → webhook → key-issuance path is already built (mock today). First real premium charge through that same wired path. "Hidden Fee Index" v0 drafted from the first 90 days of real data. |
+| 1–30 | **Verified data, two verticals** | Collect all-in seller totals with stable identities for a reviewed lodging catalog and maintain the verified subscription catalog; retire demo provenance only where evidence supports it. Submit affiliate-program applications (Booking, Expedia — rails already shipped). |
+| 31–60 | **Alerts validated + extension shipped** | Validate production deliverability, double opt-in, unsubscribe, suppression, and scheduled-update cadence end to end. List the extension in the Chrome Web Store. Publish only SEO pages backed by verified, current evidence. |
+| 61–90 | **First dollars, both motions** | First affiliate conversion tracked end-to-end. One B2B design partner live on Starter ($49/mo) with a case study after every paid-launch gate passes. First real premium charge through that same controlled path. "Added-Cost Index" v0 drafted from the first 90 days of verified data. |
 
 Exit criteria for "beta": real data in two verticals, a user can be emailed a real alert they
 double-opted into, and at least one revenue stream has produced a nonzero dollar.
