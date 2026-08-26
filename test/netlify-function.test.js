@@ -177,6 +177,46 @@ test('published Netlify production uses a validated configured or main site orig
   }
 });
 
+test('ordinary web Functions never override an unpublished production deploy at the main origin', () => {
+  const previous = Object.fromEntries(MANAGED_ENV.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      NETLIFY_DB_URL: 'postgres://example.invalid/pricetruth',
+      DISABLE_WORKER: '0',
+      WORKER_DISPATCH_SECRET: 'w'.repeat(48),
+    });
+    delete process.env.PUBLIC_BASE_URL;
+    const context = {
+      deploy: { context: 'production', published: false },
+      site: { url: 'https://pricetruth.netlify.app' },
+    };
+
+    assert.throws(
+      () => configureNetlifyEnvironment(
+        new Request('https://pricetruth.netlify.app/api/ready'),
+        context,
+      ),
+      /non-published Netlify deploy cannot use the main production site origin/,
+    );
+    assert.equal(process.env.DISABLE_WORKER, '0');
+    assert.equal(process.env.WORKER_DISPATCH_SECRET, 'w'.repeat(48));
+
+    const immutable = configureNetlifyEnvironment(
+      new Request('https://1234abcd--pricetruth.netlify.app/api/ready'),
+      context,
+    );
+    assert.equal(immutable.publicBaseUrl, 'https://1234abcd--pricetruth.netlify.app');
+    assert.equal(immutable.previewSafe, true);
+    assert.equal(process.env.DISABLE_WORKER, '1');
+    assert.equal(process.env.WORKER_DISPATCH_SECRET, undefined);
+  } finally {
+    for (const name of MANAGED_ENV) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  }
+});
+
 test('Netlify Dev permits only its independently attested HTTP loopback origin', () => {
   const previous = Object.fromEntries(MANAGED_ENV.map((name) => [name, process.env[name]]));
   try {

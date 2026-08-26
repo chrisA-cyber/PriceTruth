@@ -32,12 +32,12 @@ function enforceNonPublishedSafety(deployment) {
   return true;
 }
 
-function configureNetlifyEnvironment(request, context = {}) {
+function configureNetlifyEnvironment(request, context = {}, deploymentOptions = {}) {
   // A deployed Function is always a production security boundary. Do not let
   // an accidental dashboard value disable launch validation. The Netlify CLI
   // is the sole exception and is recognized through independent trusted
   // context, process, request, and site-origin signals.
-  const deployment = resolveDeploymentOrigin(request, context);
+  const deployment = resolveDeploymentOrigin(request, context, deploymentOptions);
   process.env.NODE_ENV = deployment.localDev ? 'development' : 'production';
   const publicBaseUrl = deployment.origin;
   process.env.PUBLIC_BASE_URL = publicBaseUrl;

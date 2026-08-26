@@ -133,7 +133,7 @@ test('scheduled worker dispatch no-ops safely without a secret', async () => {
   });
 });
 
-test('scheduled worker signs and sends a same-site background request', async () => {
+test('scheduled worker attests the main production origin when its published flag is stale', async () => {
   await withEnvironment({
     DISABLE_WORKER: '0',
     ENABLE_DEMO_SEED: '1',
@@ -144,7 +144,7 @@ test('scheduled worker signs and sends a same-site background request', async ()
     const response = await dispatchWorker(
       new Request('https://pricetruth.netlify.app/.netlify/functions/worker-schedule'),
       {
-        deploy: { context: 'production', published: true },
+        deploy: { context: 'production', published: false },
         site: { url: 'https://pricetruth.netlify.app' },
         requestId: 'schedule-test',
       },

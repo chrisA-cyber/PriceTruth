@@ -42,9 +42,27 @@ function publicationState(context = {}) {
 function resolveDeploymentOrigin(request, context = {}, {
   configuredOrigin = process.env.PUBLIC_BASE_URL,
   netlifySiteOrigin = context.site?.url || process.env.URL,
+  allowProductionMainAttestation = false,
 } = {}) {
-  const published = publicationState(context);
+  let published = publicationState(context);
   const deployContext = String(context.deploy?.context || '').trim();
+
+  // Scheduled Functions can report `published: false` even though automatic
+  // schedules only run for the published production deploy. Permit that narrow
+  // caller to attest the main origin with two platform signals. Never apply
+  // this exception to ordinary web Functions: skew protection can route an old
+  // production deploy through the unchanged main origin, where `published`
+  // must remain authoritative. Immutable deploy URLs still differ and fail
+  // closed in either case.
+  if (allowProductionMainAttestation && published === false &&
+      deployContext === 'production' && netlifySiteOrigin) {
+    const currentOrigin = normalizePublicHttpsOrigin(
+      new URL(request.url).origin,
+      'current Netlify production request origin',
+    );
+    const mainOrigin = normalizePublicHttpsOrigin(netlifySiteOrigin, 'Netlify main site origin');
+    if (currentOrigin === mainOrigin) published = true;
+  }
   const localDev = deployContext === 'dev' && published === false && process.env.NETLIFY_DEV === 'true';
 
   // The pinned Netlify CLI supplies all four signals below. Requiring all of

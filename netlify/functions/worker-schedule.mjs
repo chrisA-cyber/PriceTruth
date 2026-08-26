@@ -17,7 +17,11 @@ async function dispatchWorker(request, context = {}, {
   now = Date.now(),
   logger = console,
 } = {}) {
-  const { publicBaseUrl } = await configureNetlifyEnvironment(request, context);
+  const { publicBaseUrl } = await configureNetlifyEnvironment(request, context, {
+    // Scheduled Functions cannot be invoked through a public URL and their
+    // automatic clock runs only on the published production deploy.
+    allowProductionMainAttestation: true,
+  });
   if (process.env.DISABLE_WORKER === '1') return skipped('disabled', logger);
 
   const secret = process.env.WORKER_DISPATCH_SECRET;
