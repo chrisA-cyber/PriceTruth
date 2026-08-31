@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24.17.0-alpine AS production
+FROM node:26.8.1-alpine AS production
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
