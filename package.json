@@ -32,7 +32,7 @@
     "api:check": "node scripts/validate-openapi.mjs"
   },
   "dependencies": {
-    "@netlify/database": "^2.0.0",
+    "@netlify/database": "^2.0.1",
     "@netlify/functions": "^6.0.0"
   },
   "devDependencies": {
