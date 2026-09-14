@@ -38,6 +38,6 @@
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
     "@netlify/database-dev": "^1.0.0",
-    "@playwright/test": "1.62.1"
+    "@playwright/test": "1.63.0"
   }
 }
