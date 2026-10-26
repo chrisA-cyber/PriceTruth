@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@netlify/database": "^2.0.0",
-    "@netlify/functions": "^6.0.0"
+    "@netlify/functions": "^6.0.3"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
